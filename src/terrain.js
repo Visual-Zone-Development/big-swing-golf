@@ -3,7 +3,7 @@
 // beyond it the land rolls up into hills on the left, and slopes down through dunes and a beach
 // into the sea on the right and past the far end. Game space: x right of the tee, z downrange.
 import { TUNING, YD } from './tuning.js'
-import { HOLE } from './course.js'
+import { HOLE, inBunker } from './course.js'
 import { greenHeight, greenSurface } from './green.js'
 
 export const SEA_LEVEL = -1.1
@@ -45,12 +45,14 @@ export function landHeight(x, z) {
 
 /**
  * How the ball lies at a point, for the course and the ball's bounce and roll: 'green' | 'fringe'
- * (the course's green) | 'fairway' (the mown range) | 'rough' (beside it) | 'hill' | 'sand' | 'water'.
+ * (the green of the hole being played) | 'bunker' (its sand) | 'fairway' (the mown range) | 'rough'
+ * (beside it) | 'hill' | 'sand' (the beach) | 'water'.
  */
 export function lieAt(x, z) {
   if (groundHeight(x, z) < SEA_LEVEL) return 'water'
   const g = greenSurface(x, z, HOLE.green)
   if (g !== 'off') return g
+  if (inBunker(x, z)) return 'bunker'
   const s = surfaceAt(x, z)
   if (s !== 'range') return s
   return Math.abs(x) <= fairwayHalf(Math.max(0, z)) && z > -8 ? 'fairway' : 'rough'

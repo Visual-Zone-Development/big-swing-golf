@@ -328,3 +328,101 @@ test('a menu of games shows as big cards with a line and an icon each, and a tap
   assert.deepEqual(errors, [])
   await page.close()
 })
+
+test('holding PRACTICE and swinging sends a practice swing, not a shot, and the TV sees the club move', async () => {
+  const errors = await open({ practice: true })
+  await page.evaluate(() => {
+    window.controller.mine.outfit = { hat: 'none', top: 'none', acc: 'none' }
+    window.postMessage({ type: 'motion', state: 'on' }, '*')
+  })
+  await page.waitForFunction(() => !document.getElementById('rehearse').hidden)
+  // On your shot PRACTICE takes the Wardrobe's place beside Pause: on screen, big enough for a thumb.
+  assert.equal(await page.locator('#dress').isVisible(), false)
+  const box = await page.locator('#rehearse').boundingBox()
+  assert.ok(box.height >= 44 && box.width >= 120 && box.y + box.height <= 844, JSON.stringify(box))
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.waitForTimeout(50)
+  assert.deepEqual(await page.evaluate(() => [window.__input.a, window.__input.pr]), [true, true])
+  const { samples, truth } = simulateSwing({ face: 0, hz: 100 })
+  await page.evaluate((s) => window.postMessage({ type: 'motion', s }, '*'), toJoinPage(samples))
+  await page.waitForFunction(() => window.__sent.some((d) => d.practice), null, { timeout: 3000 })
+  const sent = await page.evaluate(() => window.__sent)
+  assert.equal(sent.filter((d) => d.shot).length, 0, 'nothing is hit')
+  const swing = sent.find((d) => d.practice).practice
+  assert.ok(Math.abs(swing.speed - truth.speed) < truth.speed * 0.08, `speed ${swing.speed} vs ${truth.speed}`)
+  assert.match(await page.locator('#readout').textContent(), /^Practice swing/)
+  await page.mouse.up()
+  await page.waitForTimeout(50)
+  assert.deepEqual(await page.evaluate(() => [window.__input.a, window.__input.pr]), [false, false])
+  // What it would have done comes back from the TV.
+  await page.evaluate(() => {
+    window.controller.mine.last = 'Practice swing. That one: 142 yd carry · Fade · 8 yd short'
+    window.controller.emit('update')
+  })
+  assert.match(await page.locator('#readout').textContent(), /142 yd carry · Fade · 8 yd short/)
+  // SET after that is a real shot. (The faked samples are stamped back from now: wait out the
+  // first swing's length, so the second isn't stamped before the first one ended.)
+  await page.waitForTimeout(2500)
+  await holdSet()
+  await page.evaluate((s) => window.postMessage({ type: 'motion', s }, '*'), toJoinPage(simulateSwing({ face: 0, hz: 100 }).samples))
+  await page.waitForFunction(() => window.__sent.some((d) => d.shot), null, { timeout: 3000 })
+  await page.mouse.up()
+  assert.deepEqual(errors, [])
+  await page.close()
+})
+
+test('a shot at a pin: the phone says how far, the wind and the lie, marks the bar where the pin is, and counts the yards up as the club goes back', async () => {
+  await open({ mode: 'course', putting: false, swing: { ...TUNING.swing.reader, backFull: 200, full: 1050, commit: 0.5, maxBack: 1.2 } })
+  await page.evaluate(() => {
+    Object.assign(window.controller.mine, { read: '131 yd to the pin · wind 8 mph left to right · Rough: 90% power', pinMark: 0.84, shotRange: 140 })
+    window.controller.emit('update')
+  })
+  assert.match(await page.locator('#hint').textContent(), /^131 yd to the pin · wind 8 mph left to right · Rough: 90% power\. Hold SET, take it back to the green mark/)
+  const mark = await page.evaluate(() => ({ hidden: document.getElementById('mark').hidden, left: document.getElementById('mark').style.left, color: getComputedStyle(document.getElementById('mark')).backgroundColor }))
+  assert.deepEqual(mark, { hidden: false, left: '84%', color: 'rgb(182, 240, 74)' })
+  // Half the backswing: about half the club's distance, in yards.
+  await page.evaluate(() => window.postMessage({ type: 'motion', state: 'on' }, '*'))
+  await holdSet()
+  const { samples } = simulateSwing({ back: 200 })
+  await page.evaluate((s) => window.postMessage({ type: 'motion', s }, '*'), toJoinPage(samples.filter((s) => s.t < 700)))
+  await page.waitForFunction(() => /yd$/.test(document.getElementById('feet').textContent) && !document.getElementById('feet').hidden)
+  await page.waitForFunction(() => parseInt(document.getElementById('feet').textContent) > 20)
+  const [yd, fill] = await page.evaluate(() => [parseInt(document.getElementById('feet').textContent), parseFloat(document.getElementById('fill').style.width)])
+  assert.ok(fill > 15 && fill < 100, `the bar is ${fill}% full`)
+  assert.ok(Math.abs(yd - (fill / 100) * 140) <= 2, `${yd} yd shown with the bar ${fill}% full`)
+  await page.mouse.up()
+  // Out of reach: no mark, and the phone says to swing full.
+  await page.evaluate(() => {
+    window.controller.mine.pinMark = null
+    window.controller.emit('update')
+  })
+  assert.equal(await page.evaluate(() => document.getElementById('mark').hidden), true)
+  assert.match(await page.locator('#hint').textContent(), /Hold SET and swing full\./)
+  await page.close()
+})
+
+test('when a round of the course ends the phone says Round over', async () => {
+  await open({ phase: 'over', over: 'Round over' })
+  assert.equal(await page.locator('#title').textContent(), 'Round over')
+  await page.close()
+})
+
+test('PRACTICE is only there on your own shot, with motion sensors, on a TV that answers it', async () => {
+  // Someone else's shot: the Wardrobe, no PRACTICE.
+  await open({ practice: true })
+  await page.evaluate(() => {
+    Object.assign(window.controller.mine, { active: false, outfit: { hat: 'none', top: 'none', acc: 'none' } })
+    window.postMessage({ type: 'motion', state: 'on' }, '*')
+  })
+  await page.waitForTimeout(100)
+  assert.equal(await page.locator('#rehearse').isVisible(), false)
+  assert.equal(await page.locator('#dress').isVisible(), true)
+  await page.close()
+  // No sensors: the pad swings, and there's nothing to rehearse.
+  await open({ practice: true })
+  await page.evaluate(() => window.postMessage({ type: 'motion', state: 'unsupported' }, '*'))
+  await page.waitForFunction(() => !document.getElementById('pad').hidden)
+  assert.equal(await page.locator('#rehearse').isVisible(), false)
+  await page.close()
+})

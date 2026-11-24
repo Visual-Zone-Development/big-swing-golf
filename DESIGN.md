@@ -4,7 +4,7 @@
 
 > Your phone is the golf club: pick a club, aim, hold SET and swing for real, and a cartoon golfer smacks the ball down a 3D range. Swing hard for distance; square the club face for a pure, straight shot.
 
-*Status: playable (driving range) · Version: 0.3.0*
+*Status: playable (range, putting green, Closest to the pin, a three-hole course) · Version: 0.10.0*
 
 ## Kickoff
 | Topic | Answer |
@@ -16,8 +16,8 @@
 | Devices | The shared screen is a Deck or handheld on a TV, a PC, or a tablet; the view fills it (1280×800 grows to 1422×800 on 16:9, 1280×960 on 4:3, no bars); phones are the clubs. Plays on: Handheld & controller, Desktop, Tablet, Party. Not Phone: a phone is the controller, never the screen, so the manifest has no `phone` field |
 | Feel | Arcadey, not a simulator: tidy carries, big readable curves, a crack and a whistle on every strike |
 | Camera / view | Behind the ball (golfer to one side) while aiming, a chase cam on the ball in flight, then looking down at where it stopped |
-| Session and structure | Two places: the **Driving range** (Practice, endless; Target challenge, 10 balls each) and the **Putting green** (Practice, a fresh putt every turn; Putting challenge, 9 holes, fewest putts). Later: **mini golf** and **full courses** |
-| Like which game? | Wii Sports golf and Topgolf (swing the controller, hit targets), but our own toy world |
+| Session and structure | Three places: the **Driving range** (Practice, endless; Target challenge, 10 balls each; Closest to the pin, 6 balls each), the **Putting green** (Practice, a fresh putt every turn; Putting challenge, 9 holes, fewest putts) and **the course** (three holes, fewest strokes). Later: **mini golf** and a longer course |
+| Like which game? | Wii Sports golf and Topgolf (swing the controller, rehearse the swing, read the wind, hit targets), but our own toy world |
 | Audience and difficulty | Everyone, family couch play. "Straight shot help" defaults to Some *(assumed)* |
 | Assets | All procedural: three.js primitives, generated textures *(assumed)* |
 | Sound and music | Generated SFX (swish, crack, whistle, thump, target fanfares) and a bouncy loop *(assumed)* |
@@ -30,7 +30,7 @@
 
 ## Core loop
 - **Moment-to-moment:** pick a club → aim → hold SET, swing → the ball flies (curve and distance from your swing) → the readout says why
-- **Round:** Practice: one shot each, round and round. Target challenge: 10 balls each, five greens worth ×1 to ×3
+- **Round:** Practice: one shot each, round and round. Target challenge: 10 balls each, five greens worth ×1 to ×3. Closest to the pin: 6 balls each, fewest feet. The course: three holes, fewest strokes
 - **Meta:** longest drive and best challenge per player; later, mini golf and courses
 
 ## The 8 formal elements
@@ -119,7 +119,7 @@ stateDiagram-v2
 ## Controls
 | Input | Action |
 |---|---|
-| Phone | Club buttons (the putter alone on the green), ◀ ▶ aim (hold), SET (hold and swing, or putt), Pause, Wardrobe (dress your bean, and Swing: right- or left-handed). No sensors: the pad. Every TV menu (pause, settings, challenge results) shows on every phone as buttons, so nobody needs to touch the TV or the tablet hosting |
+| Phone | Club buttons (the putter alone on the green), ◀ ▶ aim (hold), SET (hold and swing, or putt), PRACTICE (hold and swing: nothing is hit, see *Practice swings*), Pause, Wardrobe (dress your bean, and Swing: right- or left-handed). No sensors: the pad. Every TV menu (pause, settings, challenge results) shows on every phone as buttons, so nobody needs to touch the TV or the tablet hosting |
 | Left stick / d-pad (`x`) | Aim |
 | D-pad up/down, `lb` / `rb` | Club |
 | `a` | Meter swing (or putt): start, set power, strike |
@@ -134,7 +134,7 @@ stateDiagram-v2
 ## Inspirations
 | Game | Borrow | Change / avoid |
 |---|---|---|
-| Wii Sports golf | Swing the controller for real, club speed and a face that slices | The phone is the club; arcade carries; no hold-B-to-set: SET is the phone's one button |
+| Wii Sports golf | Swing the controller for real, club speed and a face that slices. Since 0.10.0 also: practice swings before the real one, a power bar whose marks match the hole map's, wind as an arrow and a speed, an approach-shot challenge, a sweep down each new hole and a scorecard between holes | The phone is the club; arcade carries; SET hits and a separate PRACTICE button rehearses (the Wii is the other way round: swing freely, hold a button to hit); our own holes, on our own resort; no skill rating |
 | Topgolf | Ringed targets at set distances, points by ring, a party in bays | Points by where the ball first lands, not where it rolls |
 | Arcade golf (Mario Golf, Everybody's Golf) | The three-press meter as the controller fallback, big shot names | Our own toy world and characters |
 
@@ -156,20 +156,48 @@ stateDiagram-v2
 - **Lighting** (`src/lighting.js`, values in `LIGHT`): image-based light from a CC0 midday sky (Poly Haven's *Kloofendal 48d Partly Cloudy (Pure Sky)*, Greg Zaal and Jarod Guest, `public/env/sky.hdr`), a warm sun from the back left with soft shadows that follow the action, a cool hemisphere fill, and a rim light from behind whatever the camera looks at, so the beans stand out against the grass. Neutral tone mapping (it keeps cartoon colours saturated), then a finishing stack: ambient occlusion in the creases (sprites and cut-out cards left out of it), a little bloom on only the brightest things, a warm grade and a soft vignette. Every bean has a soft round shadow under it as well. The sky photo's own sun is taken out as it loads (capped at `LIGHT.skyMax`): it was 60,000 times the sky and half its light, so a glossy bean, hat or beach hut that caught its reflection blew out to white. `STYLE.md` is the look this works to.
 - **Rendering:** three.js, fixed 1280×800, every repeated thing instanced (trees, palms, bushes, flowers, clouds, tufts, rocks, confetti, ball marks) and static props merged into single meshes: about 270 draw calls and 740k triangles at High, about 80 and 180k in light mode.
 - **Settings** match the clubhouse rail: a column of rounded navy tiles (gold when selected), each with an icon and its value drawn as what it is (volume as a level bar, on/off as a switch, choices as ‹ value ›), a cream card beside the list saying what the selected setting does, and the button prompts along the bottom. Over the crew from the title, over the course when paused. The runtime menu still handles input; `drawSettings()` only draws it.
-- **Choosing a game** (0.9.0): nobody is thrown straight onto the range. Once everyone has joined (Start in the lobby), or for *Play on this screen*, the TV asks **What are we playing?** on the clubhouse rail (Driving range, Target challenge, Putting practice, Putting challenge, The course, Back; the card says what each is), and every phone shows the same as big cards, each with an icon and a line about it (`sub` and `icon` on the menu items, sent by `phone-menus.js`). Any phone, or the TV, picks; the last game played is highlighted. *Choose a game* in the pause menu and on the results brings it back, keeping the party. It replaced the title's Mode tile and the pause menu's mode switches.
+- **Choosing a game** (0.9.0): nobody is thrown straight onto the range. Once everyone has joined (Start in the lobby), or for *Play on this screen*, the TV asks **What are we playing?** on the clubhouse rail (Driving range, Target challenge, Closest to the pin, Putting practice, Putting challenge, The course, Back; the card says what each is), and every phone shows the same as big cards, each with an icon and a line about it (`sub` and `icon` on the menu items, sent by `phone-menus.js`). Any phone, or the TV, picks; the last game played is highlighted. *Choose a game* in the pause menu and on the results brings it back, keeping the party. It replaced the title's Mode tile and the pause menu's mode switches.
 - **Menus fit:** every tile, card and row fits its words to its box: text shrinks (to 60% at most) before it spills, the rail's text grows only a little with the text size, the title card grows to fit its words, and Settings scrolls a whole row at a time to keep the selected row on screen (▲ ▼ beside the list show there's more). The picker's tiles show the short name (*Target challenge*), its card the full one (*Target challenge · 10 balls*).
 - **Graphics** (Settings): *Auto* (the default: light mode when the machine needs it), *Low* (always light mode) or *High* (full quality even on a machine with no GPU).
 - **Light mode for slow machines:** with no GPU (a software renderer, like the build server) or frames slower than 30 a second for 1.5 s, the view drops to half resolution, no shadows, no anti-aliasing (software only), no finishing stack, no sky light (a stronger fill instead: on a software renderer the sky light alone cost more than the rest of the frame) and no blade detail on the grass, fewer trees, bushes and flowers, no tufts, and the hand-built beans instead of the sculpted ones. `?debug` shows draw calls, triangles and `light`.
 - **Cover / hero:** rendered by the game's own view at full detail with the sculpted beans (`preview.html?shot=cover|hero`, dev only; `createView({ full: true })` skips light mode even on a software renderer): Pip in a bucket hat and polo finishing a drive with the crew watching, *Seaside Swing* on top.
 
 ## The course
-One test hole for now (`src/course.js`): **Lighthouse Point**, a par 4 of 288 yards straight down the range to a raised green at the far end, falling gently toward the sea, with the lighthouse behind it. Played as real golf:
-- **Everyone tees off** in seat order, then **whoever is farthest from the pin plays next** (`nextToPlay()`), putting included, until all have holed out. Fewest strokes wins; the scorecard names each score (*Birdie!*, *Par*, *Bogey*…) and keeps a best per player (`courseBest` in the save).
-- **Shots are played from where the ball lies** (`strike(…, { from, cup })`): the camera, the golfer and the aim line go to the ball, the aim starts on the line to the pin, and the game picks the club for the distance (`clubFor()`: the shortest one that gets there). Lies (`lieAt()` in `terrain.js`): fairway, rough, hill, beach, the green and its fringe. The sea is a penalty stroke, played again from where it was hit. A ball rolling slowly over the cup drops in (a chip-in). Picked up at 10. No marker is left where a ball stopped (the range's coloured pins): the next shot is played from right there.
+Three holes on the resort's range (`src/course.js` `HOLES`), played as real golf. Only the hole being played is part of the ground: `setHole(i)` swaps its green and sand in (terrain.js reads `HOLE`), and the view shows that hole's green, bunkers and tee. On the driving range the ground is the first hole's green alone, with no sand (`RANGE`).
+
+| # | Hole | Par | Yards | What it asks |
+|---|---|---|---|---|
+| 1 | **Lighthouse Point** | 4 | 288 | Straight down the range to a raised green by the sea. A bunker where a pushed drive lands, one front right of the green. Little wind (0–4 mph) |
+| 2 | **Palm Cove** | 3 | 125 | Across the range toward the dunes. Two bunkers short on the line in; fly the green and it's the beach, then the sea. 3–9 mph |
+| 3 | **Homeward** | 4 | 234 | From the far end back toward the tee box. A big drive can reach, with sand short, right and long left. 5–12 mph |
+
+- **Everyone tees off**, then **whoever is farthest from the pin plays next** (`nextToPlay()`), putting included, until all have holed out. On the next hole the best score on the last one tees off first (`honour()`). Fewest strokes over the three wins; a full round's best is saved per name (`roundBest`).
+- **Shots are played from where the ball lies** (`strike(…, { from, cup, wind })`): the camera, the golfer and the aim line go to the ball, the aim starts on the line to the pin, and the game picks the club for the distance from that lie (`clubFor()`: the shortest one that gets there). The sea is a penalty stroke, played again from where it was hit. A ball rolling slowly over the cup drops in (a chip-in). Picked up at 10.
+- **Lies** (`lieAt()`, `liePower()`): the tee, fairway, fringe and green give the whole swing; the **rough and the hills 90%**; **sand (a bunker, or the beach) 60%**, unless it's a wedge (pitching wedge 80%, sand wedge 95%). A ball that lands in a bunker keeps 30% of its speed, hardly hops, and the sand drags it to a stop (`TUNING.bunker`). The HUD's lie chip names the lie and what it costs; the club's yardage on the HUD and the phone is already scaled by it.
+- **Wind** (`rollWind()`, `windVector()`): each hole draws a speed from its range and any direction when it starts. In the flight, drag pulls the ball toward the air's speed, so into the wind it comes up short, downwind it flies on, across it drifts, and a high wedge is moved more per yard than a low driver (10 mph: a 7-iron goes about 13 yards shorter or longer, or 8 yards sideways). Putts don't feel it. On the TV: an arrow as the player sees it (up the screen is toward the pin) and the speed, pink from 8 mph. On the phone: in words (`8 mph left to right`, `in your face`).
+- **The pin's mark** (`powerFor()`): the power bar on the TV, the phone's bar and the controller's meter all carry a lime mark where the pin is: the share of a full backswing that gets a square shot to the pin with the club in hand, roll included, from this lie and in this wind. Quarter marks on the bar match the four dots on the hole map's aim line. When even a full swing is short there's no mark, and the TV says so. The phone counts the yards up as the club goes back (as it counts feet for a putt).
+- **A new hole** starts with the camera sweeping from over the green back down the hole to the tee (`flyover()`, 4.5 s, A skips it), with the hole's number, name, par, yards and wind. **Between holes** the scorecard is up (7 s, A skips): a row per player, a column per hole, under par ringed and over par boxed as on a paper card, and the round against par. The results are the same card.
 - **On the green** (or its fringe, or just off it) the shot is a putt: the putter, the putting reader on the phone (`party.public.putting`), the help's read, the same scaled bar. Gimmes inside 3 ft.
-- **On screen:** strokes and yards to the pin top left, the hole from above on the right (the pin and everyone's ball), the flag drawn bigger from far away. The range's target greens and yardage lines are hidden.
-- The green is drawn like the practice green (grid and downhill arrows) and is part of the ground (`groundHeight()`), so balls land, bounce and roll on it on the range too.
-- **Next:** more holes (a 9-hole course along the coast), sand and water hazards, walking the crew to the ball.
+- **On screen:** top left, the hole, par and stroke, the club; under it three chips: yards to the pin, the wind, the lie. On the right the hole from above, turned so the pin is at the top: fairway, green, sand, everyone's ball, and the aim line with its quarter dots. The flag is drawn bigger from far away. The range's target greens, yardage lines and (off the first hole) yardage boards are hidden.
+- A phone that joins mid-round takes two over par for each hole already played.
+- **Next:** more holes, real water in play (an inlet to carry), holes with their own land rather than the range's.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Flyover: hole 1
+    Flyover --> Shot: 4.5 s, or A
+    Shot --> Shot: farthest from the pin plays next
+    Shot --> Card: everyone has holed out
+    Card --> Flyover: holes 2 and 3 (best score tees off first)
+    Card --> Results: after hole 3
+    note right of Card: 7 s, or A
+```
+
+## Practice swings
+Wii Sports golf lets you swing freely and only hits when you hold a button; that's how its players learn how hard to swing. Here SET already means "this one counts", so rehearsing is its own button: **PRACTICE**, in the phone's bottom row on your shot (where the Wardrobe is while you wait). Hold it and swing, or stroke a putt: the same swing reader reads it, the TV's golfer follows it, and nothing is hit. The phone sends `{ practice: { speed, back, face, path… } }` in place of `{ shot }`; the TV works out what that swing would have done from this lie, in this wind (`rehearse()`), and says so on the TV and the phone: `That one: 142 yd carry · Fade · 8 yd short`, or on the green `That one: 2.1 ft short` / `That one drops!`. A teal ring stays on the bar where the practice swing finished, next to the pin's lime mark, so the real one can be a little more or a little less. Any number of practice swings; the real swing clears it. It's only offered with motion sensors, on your own shot, and when the TV says it answers them (`party.public.practice`). The meter and the flick have no practice swing: the meter already shows its power before you commit.
+
+## Closest to the pin
+The approach-shot game (`mode: 'pin'`, `course.js` `PIN`): Palm Cove's green and its bunkers, six balls each from six spots (60, 85, 110 from the rough, 125, 100 from the other side, and 150 yards), each ball in its own wind (0–10 mph, the same for everyone). Players take turns ball by ball. A ball scores **how many feet from the pin it stops**: in the hole is 0, and anything that doesn't stop on the green (the fringe, sand, the rough, the sea) is a flat **100**. Fewest feet over the six wins; a full round's best is saved per name (`pinBest`). It plays like a course shot: the game picks the club, the bar has the pin's mark, the lie and the wind count, PRACTICE rehearses.
 
 ## Audio
 Club swish, impact crack (brighter and with a chime for a pure full strike), ball whistle that follows its speed, landing thump (duller in the rough), target fanfares by ring with a cheer on a bullseye, a long-drive jingle, and a bouncy loop. On the green: a soft putter click, a hollow clunk and rattle with a little fanfare when it drops, and a clink when it lips out.
@@ -180,22 +208,25 @@ Club swish, impact crack (brighter and with a chime for a pure full strike), bal
 - 3D range, a cartoon golfer that follows your swing, ball flight with curve, bounce and roll, chase camera
 - Practice with a full shot readout and a shot map; Target challenge (10 balls each, five greens)
 - The putting green: putting practice and a 9-hole Putting challenge, with slopes, break, lip-outs and a putting stroke on the phone
-- The course: one test hole (par 4), farthest from the pin plays next
+- The course: three holes with sand, lies and wind, a sweep down each new hole, a scorecard between them
+- Closest to the pin: six approach shots at one green, fewest feet
+- Practice swings on the phone, and the pin's mark on every power bar
 - 1–4 seats, meter and flick fallbacks, settings for swing power, straight-shot help, golfer hand, flip hook/slice
 
 **Next**
 - **Real character art** for the chosen cast, and the resort taken further toward the concepts
 - **Mini golf:** the putting green's stroke and roll on toy holes with obstacles, holes in one sitting
-- **Full courses:** from the test hole to 9 holes along the coast, with sand and water hazards
-- Personal swing calibration (a few practice swings set *full* per player), wind, a longest-drive contest
+- **A longer course:** from three holes to nine along the coast, with holes that have their own land and water to carry
+- Personal swing calibration (a few practice swings set *full* per player), a longest-drive contest, a per-player skill rating (looked at for 0.10.0 and left out)
 - **Its own repo** for Discover (see below)
 
 ## Definition of done
 **Play**
 - [x] Onboarding by doing: the TV and phone say how to hold the phone and what to press; the readout says what your swing did
 - [x] Clear goals: yardage and the shot map in practice; points and a ranking in the Target challenge; retry in one press
-- [x] The course: one test hole, real stroke play
-- [ ] Mini golf, and more holes (next versions)
+- [x] The course: three holes, real stroke play, sand and wind
+- [x] Closest to the pin
+- [ ] Mini golf, and a longer course (next versions)
 
 **Feel**
 - [x] Feedback for every action: crack, chase cam, yardage counter, shot name, phone buzz; confetti and shake on target hits (shake off with Reduced shake)
@@ -220,16 +251,21 @@ Club swish, impact crack (brighter and with a chime for a pure full strike), bal
 - `swing.test.mjs`: the swing reader against a simulated golfer (`swing-sim.mjs`): square, open, closed, path, left-handed, a twisted grip, 60 Hz, a gyro that tops out, letting go early, a waggle; a putting stroke with the putting settings (speed, square and open face, longer is faster), which the full swing's settings ignore.
 - `putting.test.mjs`: the green: a putt rolls as far as its speed says, drops at the right pace, hops the cup when too firm, lips out off the edge, breaks downhill, comes up short uphill, dies in the fringe; every challenge hole can be holed, and the help's read holes each one; the help aims uphill on a side slope; a firm putt into the side of the cup drops; a ball dying beside the rim is drawn in; practice putts cycle short, middling, long; the backstroke sets the distance in proportion, the bar scaled to the putt (halfway back is the cup, 2° costs under a foot on a 3-footer), a gentle through-stroke comes up softer; help; describing a miss; fewest putts ranks first.
 - `shot.test.mjs`: distances per club, half swings, curves, aim, shot names, power settings, help, overswing, target scoring; a drive hops twice and trickles out rather than stopping dead.
+- `course.test.mjs` also covers 0.10.0: three holes, each cup on its own raised green, only the hole being played part of the ground; sand only on that hole, never on the range or into a green; a ball landing in a bunker all but stops; what each lie lets through and the club picked from the rough and from sand; the wind (short into it, long with it, drifting across it, twice the wind about twice the drift, calm changes nothing) and its words from the player's side; the pin's mark (a square swing to it finishes within 5 yards of the pin from any lie in any wind, more of the bar into the wind, none when out of reach); Closest to the pin's spots, scores and ranking; the round's totals, who tees off first, and scores against par.
 - `course.test.mjs`: a ball onto the hills settles within a few seconds; the hole (par 4, about 290 yards, the pin on a raised green); a good drive finds the fairway and the picked club reaches the green; a slow ball over the cup drops in, a fast one doesn't; farthest plays next (tee in seat order, holed-out and disconnected players skipped); score names and the scoreboard; the club for a distance.
 - `phone.test.mjs`: the real phone page with faked sensors: SET and swing sends the shot, live angle, clubs and aim, the touch pad, someone else's turn.
 - `terrain.test.mjs`: the range is flat (apart from the course green at the end), hills left, sea right and past the end; a big slice splashes and stays in the sea, a hook lands on the hillside, a straight drive stays dry.
 - `tv.test.mjs`: the TV with fake phones: each player gets a different golfer (a latecomer the next one), a 7-iron goes 155, an open face curves right, turns and out-of-turn shots, a full Target challenge.
 - `phone.test.mjs` also checks the phone shows which golfer you are, in their colour, and the safety card (SET covered until I'm ready, which tells the TV).
 - `lighting.test.mjs`: the sky light has the photo's sun taken out and leaves the open sky as it was.
+- `phone.test.mjs` also checks PRACTICE (held and swung it sends a practice swing and no shot, the TV sees the club move, SET after it is a real shot; it's only there on your own shot, with sensors), a shot at a pin (the read in words, the lime mark on the bar, yards counted up as the club goes back, no mark when out of reach) and *Round over*.
 - `phone.test.mjs` also checks a menu of games as big cards (a line and an icon each, a tap picks one), Swing in the Wardrobe (right- or left-handed, a tap sends it, the highlight follows the TV), the Wardrobe (the TV's choices as buttons, a tap sent, the highlight follows what you wear, it closes on your shot) and the putting screen (putter chip, the read, Aim at the cup) and that a simulated putting stroke through the real phone engine sends the putt.
+- `tv.test.mjs` also covers the three-hole round (the scorecard after each hole, nobody can swing at it or during the sweep down the next hole, the better score tees off first, the round's total and best, Play again from hole 1), a shot at a pin (the phone hears the distance, the wind and the lie, a swing back to the pin's mark finishes by the pin, a bunker hands over the sand wedge and names what it costs), a practice swing (nothing hit, the read on the TV and the phone, the real one clears it; a practice stroke on the green) and Closest to the pin (six balls each in turn, feet as the score, 100 for a miss, fewest wins).
 - `tv.test.mjs` also covers choosing a game (after joining, the phones get *What are we playing?* with a card per game, Back returns to the lobby, any phone picks), the course (two phones tee off in turn, no marker left where a ball stops, the farthest plays next, the green switches the phone to putting, holing out ends the round with a scorecard), a player who never picks staying right-handed whatever each swing guessed, the Wardrobe (a phone dresses its bean, nonsense ignored, remembered by name; and on the sculpted model beans once they load; with no GPU the models are never loaded), faces (focus at address, effort on the downswing, a cheer for a pure drive, idle while waiting), the putting green (the phone gets the putter and the putting reader, a stroke rolls the ball; with the help on, a stroke back to the phone's mark sinks short, middling and long putts) and a Putting challenge with two phones (farthest putts next, putts per hole, gimmes, fewest wins, Practice goes to putting practice), a phone working the whole pause menu (into Settings, changing a value, back, resume) and the results menu, the title rail's Wardrobe (playing on this screen, the bean wears what you picked, and it's remembered; Swing picks right- or left-handed), a phone picking left-handed (the bean turns round, a swing read as right-handed still plays left-handed, remembered by name), every menu's words inside their boxes at every text size with Settings scrolling to the selected row, Graphics (Low is light mode, High asks for full quality even with no GPU), and the safety screen: it waits for every phone, ignores early shots, the TV can start anyway after a moment, it shows once per party, and solo controller play skips it.
 
 ## Open questions / assumptions
+- **Practice swings and the pin's mark are untested on real phones too**: is PRACTICE in the bottom row easy to hold through a swing, and does a real backswing stop near the mark it aimed for. The wind's strength (`TUNING.wind.gain`) and the lies' costs (`TUNING.lie`) are first guesses.
+- **Chip-ins are generous.** A perfect, square swing to the pin's mark from 100 yards often drops; real swings rarely are that exact. If it happens too often on real phones, tighten the cup for a ball arriving from a full shot.
 - **Real phones are untested.** Everything is verified with simulated sensors. On the green: does a real putting stroke read with `TUNING.putting.reader` (is `minHit` 20°/s low enough for a short putt, is `start` 15°/s above a steady hand), and is 0.028 m/s per °/s the right feel for distance. The first real-phone session should check: does a normal swing read (is `minHit` / `reverse` right), what full-swing speeds people reach (set `TUNING.swing.full`), does an open face read as right on both iPhone and Android (if not, *Flip hook and slice*), and whether the gyro tops out on hard swings. `?debug` on the TV shows the raw last swing.
 - Path relies on holding the phone with the screen's edge along the target line; it counts for 60% (`pathWeight`) until real swings show how steady it is.
 - Motion only works when the phone joins over https (the published build). Over `pushplay dev` on Wi-Fi the phone gets its touch pad.
@@ -239,6 +275,7 @@ Club swish, impact crack (brighter and with a chime for a pure full strike), bal
 It starts in this workshop like every game. When it's ready for Discover, `pushplay promote seaside-swing --repo Visual-Zone-Development/seaside-swing` moves it into its own repo with its history, and the launcher follows that repo instead (its saves keep the `seaside-swing` id).
 
 ## Changelog
+- 0.10.0: **What Wii Sports golf does around the swing.** **Practice swings**: hold PRACTICE on the phone and swing; nothing is hit, and the TV and phone say what that swing would have done. **The pin on the power bar**: a lime mark on the TV's bar, the phone's and the controller's meter for the backswing that reaches the pin, quarter marks that match the dots on the hole map's aim line, and the yards counted up on the phone as you take it back. **Wind** on the course: an arrow and a speed, different every hole; it holds shots up, carries them on or drifts them. **The course is three holes**: Lighthouse Point (par 4), Palm Cove (par 3, over sand toward the dunes) and Homeward (par 4, back toward the tee box), with **bunkers**, **lies that sap the swing** (rough 90%, sand 60% unless it's a wedge), a camera sweep down each new hole and a scorecard between holes. **Closest to the pin**: a new game, six approach shots at one green, your score the feet from the pin, 100 for a miss. The one-hole course's best (`courseBest`) stays in the save but isn't shown: the round's best is new (`roundBest`). No skill rating (left out on purpose).
 - 0.9.0: **Choose what to play**: after everyone joins (and for play on this screen) the TV and every phone ask *What are we playing?*, with a big card per game on the phones; *Choose a game* in the pause menu and the results. Before, joining dropped everyone onto the driving range (or whatever the title's Mode tile said), and the phones could only toggle between two modes. **The course: one test hole**, Lighthouse Point, a par 4 down to a green by the sea. Everyone tees off, then whoever is farthest from the pin plays next; shots from where the ball lies, putting on its green, chip-ins, a hole map and a scorecard. **Putting is easier to control**: the bar is scaled to each putt, so halfway back is the cup for any length, the distance goes in proportion to the backstroke (it went with its square), the through-stroke can be gentler, and the phone shows how far your stroke will roll as you take it back. **The bean stays the hand you picked** (right-handed until you pick): it no longer flips sides when a swing was held oddly. **The ball runs out naturally**: the bounces and roll play at the flight's pace (they were fast-forwarded 2.6×), and it eases to a stop instead of stopping dead. A ball that runs up onto the hills or dunes settles once the slope can't beat the grass's grip, and never rolls more than 7 s (it could rock in a dip for a minute, which froze the game).
 - 0.8.1: **Right- or left-handed**: pick it under *Swing* in the Wardrobe (on the phone, or on the title rail when playing on this screen); remembered by name. **No more white beans**: the sky photo's sun, reflected off anything a little glossy, blew beans, hats and beach huts out to white at some angles; it's taken out of the sky light now. **A new Settings screen** in the clubhouse look, with a card explaining each setting. **Menus fit**: long mode names, big text sizes and the Settings list (which ran off the bottom of the screen) all stay inside their boxes; Settings scrolls.
 - 0.8.0: **The resort comes to life.** New lighting: light from a real sky, a warm sun with soft shadows, a rim light that makes the beans pop, soft shadows in the creases and a warm finish. Real grass: blade texture, mowing stripes, soft patches and swaying tufts. Beach huts on the dunes and rocks along the shore. **Expressive 3D eyes** on the beans, with lids, brows and pupils that follow the ball. **A new title screen**, the clubhouse rail, with the crew beside it and a **Wardrobe** for playing on this screen. **Graphics** setting (Auto, Low, High). New cover and hero.

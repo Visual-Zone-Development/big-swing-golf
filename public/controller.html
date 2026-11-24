@@ -43,8 +43,12 @@
       #set small { font-size: 16px; margin-top: 6px; }
       #set.down { transform: translateY(7px) scale(0.97); box-shadow: 0 3px 0 #0b1a36; background: radial-gradient(circle at 35% 30%, #ffe28a, #ffd23f 55%, #d9a514); }
       #set.hit { background: radial-gradient(circle at 35% 30%, #ff9ab8, #ff5c8a 55%, #c9305e); color: #fff8ec; }
+      #rehearse { background: #24467d; color: #fff8ec; border: 3px solid #2ad1c9; line-height: 1.1; padding: 6px 10px; }
+      #rehearse small { display: block; font-size: 12px; font-weight: 600; color: #bcd0f2; }
+      #rehearse.down { background: #2ad1c9; color: #0b1a36; }
+      #rehearse.down small { color: #0b1a36; }
       #pad { width: min(84vw, 44vh, 360px); aspect-ratio: 0.85; border-radius: 26px; background: #24467d; border: 4px dashed #bcd0f2; display: flex; align-items: center; justify-content: center; text-align: center; color: #bcd0f2; font-weight: 800; padding: 20px; touch-action: none; }
-      #meter { position: relative; width: min(80vw, 340px); height: 16px; border-radius: 8px; background: #0b1a36; overflow: hidden; }
+      #meter { position: relative; flex: none; width: min(80vw, 340px); height: 16px; border-radius: 8px; background: #0b1a36; overflow: hidden; }
       #meter .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: #ffd23f; }
       #feet { margin-top: 6px; font-size: 20px; font-weight: 800; color: #ffd23f; text-align: center; }
       #meter .mark { position: absolute; top: 0; bottom: 0; width: 5px; margin-left: -2px; border-radius: 3px; background: #fff8ec; box-shadow: 0 0 0 2px #0b1a36; }
@@ -90,6 +94,14 @@
       #wardrobe .opts.two { grid-template-columns: repeat(2, 1fr); }
       #wardrobe-done { margin-top: auto; background: #b6f04a; font-size: 24px; min-height: 64px; }
       .dress { background: #ffd23f; }
+      /* A short phone: a smaller SET and tighter rows, so the bar and the bottom row stay clear. */
+      @media (max-height: 720px) {
+        #set { width: min(56vw, 23vh, 290px); font-size: 30px; }
+        .clubs button { min-height: 42px; }
+        .stage { gap: 8px; }
+        .hint { font-size: 14px; margin-top: 2px; }
+        h1 { font-size: 22px; }
+      }
       [hidden] { display: none !important; }
     </style>
   </head>
@@ -107,7 +119,7 @@
       </div>
       <div class="scores" id="scores"></div>
       <button id="again" hidden>Play again</button>
-      <div class="row" id="playrow"><button class="dress" id="dress">Wardrobe</button><button class="pause" id="pause">Pause</button></div>
+      <div class="row" id="playrow"><button id="rehearse" hidden>PRACTICE<small>hold &amp; swing, no hit</small></button><button class="dress" id="dress">Wardrobe</button><button class="pause" id="pause">Pause</button></div>
       <section id="wardrobe" hidden aria-labelledby="wardrobe-title">
         <h1 id="wardrobe-title">Dress your bean</h1>
         <div id="wardrobe-slots"></div>
@@ -578,6 +590,7 @@
       const swingCfg = () => controller.public.swing ?? {}
       const reader = createSwingReader(swingCfg)
       let held = false
+      let rehearsing = false // held with PRACTICE, not SET: the swing is read but nothing is hit
       let aimDir = 0
       let shotSent = false
       let lastRead = ''
@@ -601,6 +614,7 @@
           st,
           ...(st === 'touch' ? { why: pm.state.slice(6) } : {}),
           a: held,
+          pr: held && rehearsing,
           sw: held ? Math.round(reader.angle) : 0,
           bk: held ? Math.round(reader.back) : 0,
           swp: held ? reader.phase : 'idle',
@@ -612,6 +626,13 @@
 
       function hit(shot) {
         shotSent = true
+        if (rehearsing) {
+          // A practice swing: the TV works out what it would have done and sends it back (mine.last).
+          controller.send({ practice: shot })
+          controller.vibrate(15)
+          $('readout').textContent = lastRead = 'Practice swing…'
+          return
+        }
         controller.send({ shot })
         controller.vibrate(45)
         setBtn.classList.add('hit')
@@ -627,6 +648,7 @@
         if (!myTurn() || held) return
         setBtn.setPointerCapture(e.pointerId) // thumbs slide during a swing: let go anywhere
         held = true
+        rehearsing = false
         shotSent = false
         reader.arm()
         setBtn.classList.add('down')
@@ -639,12 +661,29 @@
         held = false
         reader.disarm()
         setBtn.classList.remove('down', 'hit')
+        rehearseBtn.classList.remove('down')
         setBtn.firstChild.textContent = 'SET'
-        if (!shotSent) $('readout').textContent = 'No swing read. Keep holding SET until you hit through the ball.'
+        if (!shotSent) $('readout').textContent = rehearsing ? 'No swing read. Keep holding PRACTICE until you swing through.' : 'No swing read. Keep holding SET until you hit through the ball.'
         send()
       }
       setBtn.addEventListener('pointerup', letGo)
       setBtn.addEventListener('pointercancel', letGo)
+      // PRACTICE: the same hold-and-swing, read by the same reader, but the ball stays where it is.
+      const rehearseBtn = $('rehearse')
+      rehearseBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault()
+        if (!myTurn() || held) return
+        rehearseBtn.setPointerCapture(e.pointerId)
+        held = true
+        rehearsing = true
+        shotSent = false
+        reader.arm()
+        rehearseBtn.classList.add('down')
+        controller.vibrate(10)
+        send()
+      })
+      rehearseBtn.addEventListener('pointerup', letGo)
+      rehearseBtn.addEventListener('pointercancel', letGo)
 
       for (const b of document.querySelectorAll('[data-aim]')) {
         const set = (v) => (e) => {
@@ -863,7 +902,7 @@
         if (!mineNow && held) letGo()
         if (mineNow && !wasMine) wardrobeOpen = false // your shot: back to the club
         wasMine = mineNow
-        $('title').textContent = pub.paused ? 'Paused' : over ? 'Challenge over' : pub.banner ? pub.banner : mineNow ? (mine.golfer ? `Your shot, ${mine.golfer.name}!` : 'Your shot!') : pub.turnName ? `${pub.turnName} is up` : 'Seaside Swing'
+        $('title').textContent = pub.paused ? 'Paused' : over ? (pub.over ?? 'Challenge over') : pub.banner ? pub.banner : mineNow ? (mine.golfer ? `Your shot, ${mine.golfer.name}!` : 'Your shot!') : pub.turnName ? `${pub.turnName} is up` : 'Seaside Swing'
         // Putting: the putting modes, or a ball on the course's green (the TV says which).
         const putting = pub.putting ?? (pub.mode === 'putting' || pub.mode === 'putts')
         $('hint').textContent = over
@@ -873,7 +912,9 @@
             : mineNow
             ? touch
               ? 'Pick a club and aim, then pull down on the pad and flick up.'
-              : 'Grip it like a club: screen up at you, top toward the ball. Hold SET, take it back to fill the bar, then swing through.'
+              : mine.read
+                ? `${mine.read}. ${mine.pinMark ? 'Hold SET, take it back to the green mark, swing through.' : 'Hold SET and swing full.'}`
+                : 'Grip it like a club: screen up at you, top toward the ball. Hold SET, take it back to fill the bar, then swing through.'
             : pub.ballsLeft
               ? pub.ballsLeft
               : 'Look at the TV.'
@@ -884,13 +925,20 @@
         pad.hidden = !touch
         renderMenu(pub.menu ?? null)
         renderWardrobe()
-        $('dress').hidden = !mine.outfit
+        // On your shot the bottom row is PRACTICE (hold it and swing: the TV says what that swing
+        // would have done) and Pause; the Wardrobe is for while you wait.
+        const canRehearse = mineNow && !touch && Boolean(pub.practice)
+        rehearseBtn.hidden = !canRehearse
+        $('dress').hidden = !mine.outfit || canRehearse
         $('again').hidden = !over || Boolean(pub.menu)
         $('playrow').hidden = over || !pub.phase || pub.phase === 'menu' || Boolean(pub.menu)
         $('pause').textContent = pub.paused ? 'Resume' : 'Pause'
         // Putting with the help: a mark on the bar for how far back to take it.
-        $('mark').hidden = !(putting && mine.puttMark)
-        if (mine.puttMark) $('mark').style.left = `${Math.min(1, mine.puttMark) * 100}%`
+        // A shot at a pin: a green mark for the backswing that gets there.
+        const mark = putting ? mine.puttMark : mine.pinMark
+        $('mark').hidden = !mark
+        $('mark').style.background = putting ? '' : '#b6f04a'
+        if (mark) $('mark').style.left = `${Math.min(1, mark) * 100}%`
         $('aim').textContent = !mine.aim ? (putting ? 'Aim at the cup' : 'Aim straight') : `Aim ${Math.abs(mine.aim)}° ${mine.aim > 0 ? 'right' : 'left'}`
         if (mine.last && mine.last !== lastRead) $('readout').textContent = lastRead = mine.last
         const ck = JSON.stringify([pub.clubs, mine.club])
@@ -947,10 +995,12 @@
         if (!held || !down) fillOk = false
         $('fill').style.width = `${Math.min(1, want) * 100}%`
         // Putting: how far this backstroke rolls (on the flat), live, against the cup's distance.
-        const range = controller.mine?.puttRange
+        // A full swing: how far this backswing carries, in yards.
+        const yards = controller.mine?.shotRange
+        const range = controller.mine?.puttRange ?? yards
         const ft = Math.round(Math.min(want, cfg.maxBack ?? 1.2) * range)
         $('feet').hidden = !(range && held)
-        if (range && held) $('feet').textContent = `${ft} ft`
+        if (range && held) $('feet').textContent = controller.mine?.puttRange ? `${ft} ft` : `${Math.round(Math.min(want, 1.12) * yards)} yd`
         $('fill').style.background = fillOk ? '#b6f04a' : want > 1 ? '#ff5c8a' : '#ffd23f'
       }
       controller.on('update', render)

@@ -270,9 +270,9 @@ test('the Target challenge gives each player ten balls, then ranks them', async 
   await t.page.close()
 })
 
-/** The game startParty's first phone picks: practice → targets → putting → putts → course, by index. */
+/** The game startParty's first phone picks: practice → targets → putting → putts → course → pin, by index. */
 async function chooseMode(t, steps) {
-  t.mode = ['practice', 'targets', 'putting', 'putts', 'course'][steps]
+  t.mode = ['practice', 'targets', 'putting', 'putts', 'course', 'pin'][steps]
 }
 /** A phone putt: its stroke speed at impact (deg/s), square. */
 const putt = (speed) => ({ speed, peak: speed, face: 0, path: 0, back: 12, tempo: 1.6, hand: 'R', ms: 0 })
@@ -544,7 +544,7 @@ test('every menu’s words stay inside their boxes at every text size, and the S
     }
     // The game picker: every game, and its card.
     await t.page.evaluate(() => (window.__game.state.screen = 'pick'))
-    for (const id of ['practice', 'targets', 'putting', 'putts', 'course', 'back']) {
+    for (const id of ['practice', 'targets', 'pin', 'putting', 'putts', 'course', 'back']) {
       await t.page.evaluate((id) => window.__game.pickMenu.select(id), id)
       await frames(t.page)
       assert.deepEqual(await t.state(() => window.__game.overflow), [], `picker, ${id}, text ${size}`)
@@ -576,11 +576,12 @@ test('every menu’s words stay inside their boxes at every text size, and the S
   await t.page.close()
 })
 
-test('the course: two phones tee off in turn, the farthest from the pin plays next, the green switches to putting, and holing out ends the round with a scorecard', async () => {
+test('the course: two phones tee off in turn, the farthest from the pin plays next, the green switches to putting, and holing out brings the scorecard, then the next hole; after three, the round’s results', async () => {
   const t = await tv()
   await chooseMode(t, 4) // the course
   await startParty(t, [['p1', 'Ada'], ['p2', 'Bo']])
   assert.equal(await t.state(() => window.__game.state.mode), 'course')
+  await t.page.evaluate(() => (window.__game.state.wind = { mph: 0, dir: 0 })) // a calm day, so the drives are the same every run
   assert.equal(await t.state(() => window.__game.party.public.putting), false)
   // The driver to start (the game picks the club for the distance).
   assert.equal(await t.state(() => window.__game.state.seats[0].club), 0)
@@ -625,12 +626,183 @@ test('the course: two phones tee off in turn, the farthest from the pin plays ne
   const back1 = await t.state(() => window.__game.party.views.p1.puttMark * window.__game.party.public.swing.backFull)
   t.say('p1', { shot: { ...putt(400), back: back1 } })
   await t.page.waitForFunction(() => window.__game.state.phase === 'result', null, { timeout: 10000 })
+  // Everyone has holed out: the scorecard, with the hole on each card. Ada: a drive and a putt.
   await t.page.evaluate(() => (window.__game.state.resultTime = 99))
+  await t.page.waitForFunction(() => window.__game.state.phase === 'card')
+  assert.equal(await t.state(() => window.__game.state.screen), 'playing')
+  assert.deepEqual(await t.state(() => window.__game.state.seats[0].card), [2])
+  assert.equal(await t.state(() => window.__game.party.public.cards[0].score), '2')
+  assert.equal(await t.state(() => window.__game.party.views.p1.active && window.__game.party.public.phase === 'aim'), false) // nobody can swing at the scorecard
+  // On to the second hole: the camera sweeps down it first, then Ada (the better score) tees off.
+  await t.page.evaluate(() => (window.__game.state.cardTime = 99))
+  await t.page.waitForFunction(() => window.__game.state.phase === 'flyover')
+  assert.equal(await t.state(() => window.__game.state.courseHole), 1)
+  t.say('p1', { shot: SQUARE }) // too soon: ignored while the camera is still coming down the hole
+  await t.page.waitForTimeout(150)
+  assert.equal(await t.state(() => window.__game.state.phase), 'flyover')
+  await t.page.evaluate(() => (window.__game.state.fly = 99))
+  await t.page.waitForFunction(() => window.__game.state.phase === 'aim')
+  assert.equal(await t.state(() => window.__game.party.public.turn), 'p1')
+  const two = await t.state(() => ({ ball: window.__game.state.seats[0].ball, strokes: window.__game.state.seats[0].strokes, club: window.__game.state.seats[0].club, left: window.__game.party.public.ballsLeft }))
+  assert.deepEqual(two.ball, { x: -30, z: 70 }) // Palm Cove's tee
+  assert.equal(two.strokes, 0)
+  assert.equal(two.club, 4) // 125 yards: the 9 iron
+  assert.match(two.left, /^Hole 2 of 3 · Palm Cove · par 3/)
+  // The rest of the round, quickly: everyone holed out on two and three.
+  const holeOut = async (scores) => {
+    await t.page.evaluate((scores) => {
+      const g = window.__game
+      g.state.seats.forEach((s, i) => ((s.done = true), (s.strokes = scores[i])))
+      g.state.phase = 'result'
+      g.state.resultTime = 99
+    }, scores)
+    await t.page.waitForFunction(() => window.__game.state.phase === 'card')
+    await t.page.evaluate(() => (window.__game.state.cardTime = 99))
+  }
+  await holeOut([4, 3])
+  await t.page.waitForFunction(() => window.__game.state.phase === 'flyover' && window.__game.state.courseHole === 2)
+  await t.page.evaluate(() => (window.__game.state.fly = 99))
+  await t.page.waitForFunction(() => window.__game.state.phase === 'aim')
+  assert.equal(await t.state(() => window.__game.party.public.turn), 'p2') // Bo's 3 on the second: his honour
+  await holeOut([5, 4])
   await t.page.waitForFunction(() => window.__game.state.screen === 'gameover')
-  const seats = await t.state(() => window.__game.state.seats.map((s) => ({ strokes: s.strokes, done: s.done })))
-  assert.ok(seats.every((s) => s.done))
-  assert.equal(seats[0].strokes, 2) // a drive and a putt
+  const seats = await t.state(() => window.__game.state.seats.map((s) => ({ card: s.card, best: s.newBest })))
+  assert.deepEqual(seats[0].card, [2, 4, 5])
+  assert.equal(seats[1].card.length, 3)
+  assert.ok(seats.every((s) => s.best), 'a first full round is a best')
+  assert.equal(await t.state(() => window.__game.party.public.cards[0].score), '11')
   assert.equal(await t.state(() => window.__game.party.public.menu?.title), 'Round over')
+  assert.equal(await t.state(() => window.__game.party.public.over), 'Round over')
+  // Play again starts from the first hole.
+  t.say('p1', { menu: { id: 'again' } })
+  await t.page.waitForFunction(() => window.__game.state.screen === 'playing' && window.__game.state.courseHole === 0 && window.__game.state.seats[0].card.length === 0)
+  assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
+test('on the course the phone hears the distance, the wind and the lie, and gets the pin’s mark; a swing back to the mark finishes by the pin', async () => {
+  const t = await tv()
+  await chooseMode(t, 4)
+  await startParty(t, [['p1', 'Ada']])
+  // The second hole, into a 10 mph wind, from the rough short of the tee.
+  await t.page.evaluate(() => {
+    const g = window.__game
+    g.state.cardTime = 0
+    g.state.seats[0].done = true
+    g.state.seats[0].strokes = 4
+    g.state.phase = 'result'
+    g.state.resultTime = 99
+  })
+  await t.page.waitForFunction(() => window.__game.state.phase === 'card')
+  await t.page.evaluate(() => (window.__game.state.cardTime = 99))
+  await t.page.waitForFunction(() => window.__game.state.phase === 'flyover')
+  await t.page.evaluate(() => {
+    const g = window.__game
+    g.state.wind = { mph: 10, dir: 216.5 } // straight back down the line from the pin
+    g.state.fly = 99
+  })
+  await t.page.waitForFunction(() => window.__game.state.phase === 'aim' && window.__game.party.views.p1.pinMark)
+  let v = await t.state(() => window.__game.party.views.p1)
+  assert.match(v.read, /^125 yd to the pin · wind 10 mph in your face$/)
+  assert.equal(v.shotRange, 130) // the 9 iron, teed up
+  // Into the wind the 9 iron can't get there at full: the game doesn't promise it can. Take the 7.
+  t.say('p1', { club: 3 })
+  await t.page.waitForFunction(() => window.__game.party.views.p1.shotRange === 155 && window.__game.party.views.p1.pinMark)
+  v = await t.state(() => window.__game.party.views.p1)
+  assert.ok(v.pinMark > 0.6 && v.pinMark < 1, `mark at ${v.pinMark}`)
+  t.say('p1', { shot: { ...SQUARE, back: Math.round(200 * v.pinMark) } })
+  await t.page.waitForFunction(() => window.__game.state.phase === 'result', null, { timeout: 15000 })
+  const after = await t.state(() => ({ ball: window.__game.state.seats[0].ball, cup: window.__game.state.seats[0].cup, putting: window.__game.party.public.putting }))
+  assert.ok(Math.hypot(after.ball.x - after.cup.x, after.ball.z - after.cup.z) < 7, `stopped ${Math.hypot(after.ball.x - after.cup.x, after.ball.z - after.cup.z).toFixed(1)} m from the pin`)
+  // From a bunker: the lie is named, with what it costs, and the game hands over the sand wedge.
+  await t.page.evaluate(() => {
+    const g = window.__game
+    g.state.seats[0].ball = { x: 25, z: 144.5 }
+    g.state.phase = 'result'
+    g.state.resultTime = 99
+  })
+  await t.page.waitForFunction(() => window.__game.state.phase === 'aim')
+  v = await t.state(() => ({ ...window.__game.party.views.p1, clubId: window.__game.TUNING && window.__game.state.seats[0].club }))
+  assert.equal(v.clubId, 6)
+  assert.match(v.read, /Bunker: 95% power$/)
+  assert.equal(v.shotRange, 76)
+  t.say('p1', { club: 3 })
+  await t.page.waitForFunction(() => /Bunker: 60% power$/.test(window.__game.party.views.p1.read))
+  assert.equal(await t.state(() => window.__game.party.views.p1.shotRange), 93)
+  assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
+test('a practice swing hits nothing: the TV and the phone say what it would have done, and the real one still counts', async () => {
+  const t = await tv()
+  await startParty(t, [['p1', 'Ada']])
+  t.say('p1', { club: 3 })
+  await t.page.waitForFunction(() => window.__game.state.seats[0].club === 3)
+  assert.equal(await t.state(() => window.__game.party.public.practice), true)
+  t.say('p1', { practice: { ...SQUARE, back: 100 } }) // half a backswing
+  await t.page.waitForFunction(() => window.__game.state.ghost)
+  const g = await t.state(() => ({ ghost: window.__game.state.ghost, phase: window.__game.state.phase, shots: window.__game.state.seats[0].shots.length, last: window.__game.party.views.p1.last }))
+  assert.equal(g.phase, 'aim')
+  assert.equal(g.shots, 0)
+  assert.ok(Math.abs(g.ghost.power - 0.5) < 0.02)
+  assert.match(g.ghost.text, /^That one: 7\d yd carry · Straight!$/)
+  assert.match(g.last, /^Practice swing\. That one: 7\d yd carry/)
+  // Someone else's phone can't rehearse on your shot, and the real swing clears the read.
+  t.say('p1', { shot: SQUARE })
+  await t.page.waitForFunction(() => window.__game.state.phase === 'result', null, { timeout: 10000 })
+  assert.equal(await t.state(() => window.__game.state.ghost), null)
+  assert.equal(await t.state(() => window.__game.state.seats[0].shots.length), 1)
+  // On the green: a practice stroke says how the putt would finish, and the ball stays put.
+  await t.page.close()
+  const p = await tv()
+  await chooseMode(p, 2)
+  await startParty(p, [['p1', 'Ada']])
+  const start = await p.state(() => window.__game.state.seats[0].ball)
+  const back = await p.state(() => window.__game.party.views.p1.puttMark * window.__game.party.public.swing.backFull)
+  p.say('p1', { practice: { ...putt(400), back } })
+  await p.page.waitForFunction(() => window.__game.state.ghost)
+  assert.match(await p.state(() => window.__game.state.ghost.text), /^That one drops!$/)
+  assert.deepEqual(await p.state(() => window.__game.state.seats[0].ball), start)
+  assert.equal(await p.state(() => window.__game.state.phase), 'aim')
+  assert.deepEqual(p.errors, [])
+  await p.page.close()
+})
+
+test('Closest to the pin: six balls each from six spots, feet from the pin as the score, a miss counts 100, fewest feet wins', async () => {
+  const t = await tv()
+  await chooseMode(t, 5)
+  await startParty(t, [['p1', 'Ada'], ['p2', 'Bo']])
+  assert.equal(await t.state(() => window.__game.state.mode), 'pin')
+  await t.page.evaluate(() => (window.__game.state.winds = window.__game.state.winds.map(() => ({ mph: 0, dir: 0 })))) // calm, so it plays the same every run
+  await t.page.evaluate(() => (window.__game.state.wind = { mph: 0, dir: 0 }))
+  await t.page.waitForFunction(() => /no wind/.test(window.__game.party.views.p1.read))
+  assert.equal(await t.state(() => window.__game.party.public.putting), false)
+  assert.match(await t.state(() => window.__game.party.public.ballsLeft), /^Ada: ball 1 of 6$/)
+  const next = async () => {
+    await t.page.evaluate(() => (window.__game.state.resultTime = 99))
+    await t.page.waitForFunction(() => window.__game.state.phase === 'aim' || window.__game.state.screen === 'gameover')
+  }
+  for (let ball = 0; ball < 6; ball++) {
+    // Ada swings back to the pin's mark; Bo barely moves it (short of the green: 100).
+    await t.page.waitForFunction(() => window.__game.party.public.turn === 'p1' && window.__game.party.views.p1.pinMark)
+    const v = await t.state(() => window.__game.party.views.p1)
+    assert.match(v.read, /^\d+ yd to the pin · no wind/)
+    t.say('p1', { shot: { ...SQUARE, back: 200 * v.pinMark } })
+    await t.page.waitForFunction(() => window.__game.state.phase === 'result', null, { timeout: 15000 })
+    await next()
+    assert.equal(await t.state(() => window.__game.party.public.turn), 'p2')
+    t.say('p2', { shot: { ...SQUARE, back: 40, speed: 300 } })
+    await t.page.waitForFunction(() => window.__game.state.phase === 'result', null, { timeout: 15000 })
+    await next()
+  }
+  await t.page.waitForFunction(() => window.__game.state.screen === 'gameover')
+  const seats = await t.state(() => window.__game.state.seats.map((s) => ({ shots: s.shots, best: s.newBest })))
+  assert.equal(seats[0].shots.length, 6)
+  assert.ok(seats[0].shots.filter((x) => x.on).length >= 5, JSON.stringify(seats[0].shots))
+  assert.ok(seats[0].shots.filter((x) => x.on).every((x) => x.feet < 40), JSON.stringify(seats[0].shots))
+  assert.ok(seats[1].shots.every((x) => !x.on && x.feet === 100))
+  assert.equal(await t.state(() => window.__game.party.public.cards[1].score), '600 ft')
+  assert.equal(await t.state(() => window.__game.party.public.menu?.title), 'Challenge over')
   assert.deepEqual(t.errors, [])
   await t.page.close()
 })
@@ -646,7 +818,7 @@ test('after everyone joins, nobody is thrown onto the range: the phones get “W
   await t.page.waitForFunction(() => window.__game.state.screen === 'pick')
   const menu = await t.state(() => window.__game.party.public.menu)
   assert.equal(menu.title, 'What are we playing?')
-  assert.deepEqual(menu.items.map((i) => i.id), ['practice', 'targets', 'putting', 'putts', 'course', 'back'])
+  assert.deepEqual(menu.items.map((i) => i.id), ['practice', 'targets', 'pin', 'putting', 'putts', 'course', 'back'])
   assert.ok(menu.items.slice(0, 5).every((i) => i.sub && i.icon), 'each game has a line and an icon for its card')
   // Back to the lobby, and in again; then Bo (not the first to join) picks the course.
   t.say('p2', { menu: { id: 'back' } })

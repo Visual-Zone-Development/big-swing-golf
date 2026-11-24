@@ -9,7 +9,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import { TUNING, YD } from './tuning.js'
 import { fairwayHalf, groundHeight, landHeight, SEA_LEVEL, surfaceAt } from './terrain.js'
-import { HOLE } from './course.js'
+import { HOLES, setHole } from './course.js'
 import { GREEN, greenReach, puttHeight, slopeAt } from './putting.js'
 import { createTufts, grassMaterial, grassUVs, setGrassDetail } from './grass.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
@@ -127,6 +127,8 @@ export function createScenery(scene) {
   fairway.receiveShadow = true
   scene.add(fairway)
   const lineMat = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.45, depthWrite: false })
+  const boards = new THREE.Group() // the yardage boards: from the range's tee, so only where that's the tee
+  scene.add(boards)
   const lines = []
   for (let yd = 50; yd <= 250; yd += 50) {
     const z = yd * YD
@@ -135,7 +137,7 @@ export function createScenery(scene) {
       const board = yardBoard(yd)
       board.position.set(side * (fairwayHalf(z) + 7), 0, -z)
       board.rotation.y = -side * 0.35
-      scene.add(board)
+      boards.add(board)
     }
   }
   const yardLines = new THREE.Mesh(mergeGeometries(lines), lineMat)
@@ -293,9 +295,22 @@ export function createScenery(scene) {
   const putting = puttingGreen()
   putting.visible = false
   scene.add(putting)
-  // ---- the course's green, at the far end of the range (always there) -------------------------------
-  const courseGreen = puttingGreen(HOLE.green)
-  scene.add(courseGreen)
+  // ---- the course: each hole's green, sand and tee; only the one being played is shown -----------
+  // (the first hole's green, with no sand, is the far end of the driving range).
+  const holes = HOLES.map((h, i) => {
+    const group = new THREE.Group()
+    group.add(puttingGreen(h.green))
+    const extras = new THREE.Group() // the sand and the tee: not on the driving range
+    extras.add(bunkers(h.bunkers))
+    const teeGroup = new THREE.Group()
+    if (i > 0) teeGroup.add(teeGround(h))
+    extras.add(teeGroup)
+    group.add(extras)
+    group.visible = i === 0
+    extras.visible = false
+    scene.add(group)
+    return { group, extras, teeGroup, tufts: null }
+  })
 
   // ---- tufts: grass standing up out of the rough, where the camera is close ----------------------------
   const tuftRand = rng(97)
@@ -332,15 +347,25 @@ export function createScenery(scene) {
   }
   const ringTufts = createTufts(ringItems)
   greens.add(ringTufts.mesh)
-  // Round the course's green.
-  for (let i = 0; i < 500; i++) {
-    const G = HOLE.green
-    const a = tuftRand() * Math.PI * 2
-    const e = 1 + G.fringe * (1.05 + tuftRand() * 1.4)
-    tuft(G.x + Math.cos(a) * G.rx * e, G.z + Math.sin(a) * G.rz * e, 1)
-  }
   const tufts = createTufts(tuftItems)
   scene.add(tufts.mesh)
+  // Round each hole's green (shown with it). The ground under them is that hole's.
+  HOLES.forEach((h, i) => {
+    setHole(i)
+    const items = []
+    const G = h.green
+    for (let k = 0; k < 500; k++) {
+      const a = tuftRand() * Math.PI * 2
+      const e = 1 + G.fringe * (1.05 + tuftRand() * 1.4)
+      const x = G.x + Math.cos(a) * G.rx * e
+      const z = G.z + Math.sin(a) * G.rz * e
+      if (h.bunkers.some((b) => Math.hypot((x - b.x) / (b.rx + 0.6), (z - b.z) / (b.rz + 0.6)) < 1)) continue
+      items.push({ x, z, y: groundHeight(x, z), s: 0.75 + tuftRand() * 0.6, r: tuftRand() * Math.PI, color: roughTones[Math.floor(tuftRand() * roughTones.length)] })
+    }
+    holes[i].tufts = createTufts(items)
+    holes[i].group.add(holes[i].tufts.mesh)
+  })
+  setHole(-1)
   // Round the putting green's fringe (hidden with the green).
   const fringeItems = []
   for (let i = 0; i < 900; i++) {
@@ -361,6 +386,18 @@ export function createScenery(scene) {
     setPutting(on) {
       putting.visible = on
     },
+    /**
+     * Which hole's green is out there (-1: the range, which is the first hole's green alone), and
+     * whether its sand and its tee are too (the course; Closest to the pin has the sand, no tee).
+     */
+    setCourse(hole = -1, { sand = false, tee = false } = {}) {
+      holes.forEach((h, i) => {
+        h.group.visible = i === Math.max(0, hole)
+        h.extras.visible = hole >= 0 && sand
+        h.teeGroup.visible = tee
+      })
+      boards.visible = hole <= 0 && !(hole === 0 && !tee)
+    },
     /** The range's target greens and yardage lines: shown on the range, not on the course. */
     setTargets(on) {
       greens.visible = on
@@ -371,6 +408,7 @@ export function createScenery(scene) {
       setGrassDetail(!light)
       flowerMesh.visible = !light
       tufts.mesh.visible = !light
+      for (const h of holes) h.tufts.mesh.visible = !light
       fringeTufts.mesh.visible = !light
       ringTufts.mesh.visible = !light
       bushMesh.visible = !light
@@ -380,6 +418,7 @@ export function createScenery(scene) {
     update(dt, lit = -1) {
       clock += dt
       tufts.update(dt)
+      for (const h of holes) if (h.group.visible) h.tufts.update(dt)
       fringeTufts.update(dt)
       ringTufts.update(dt)
       greens.children.forEach((g, i) => {
@@ -488,6 +527,52 @@ function puttingGreen(G = GREEN) {
   const arrowGeo = new THREE.BufferGeometry()
   arrowGeo.setAttribute('position', new THREE.Float32BufferAttribute(arrows, 3))
   group.add(new THREE.Mesh(arrowGeo, new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.4, depthWrite: false, side: THREE.DoubleSide })))
+  return group
+}
+
+/**
+ * A hole's bunkers: ovals of pale sand, a touch darker toward the lip, each with a mown collar
+ * round it. Flat, just above the fairway (the sand's drag is in flight.js).
+ */
+function bunkers(list) {
+  const parts = []
+  const sand = new THREE.Color(COLORS.sand)
+  for (const b of list) {
+    const lip = new THREE.RingGeometry(1, 1.14, 40, 1).rotateX(-Math.PI / 2)
+    parts.push([at(lip, b.x, 0.045, -b.z, b.rx, 1, b.rz), '#3f9a34'])
+    // The sand in three rings, lightest in the middle, so it reads as a hollow.
+    ;[1, 0.78, 0.45].forEach((r, k) => {
+      const disc = new THREE.CircleGeometry(r, 40).rotateX(-Math.PI / 2)
+      parts.push([at(disc, b.x, 0.05 + k * 0.004, -b.z, b.rx, 1, b.rz), sand.clone().offsetHSL(0, 0, -0.07 + k * 0.045)])
+    })
+  }
+  if (!parts.length) return new THREE.Group()
+  const mesh = merged(parts, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }))
+  mesh.receiveShadow = true
+  return mesh
+}
+
+/** A hole's own tee (the holes that don't start from the range's): a mown pad and two markers, facing the pin. */
+function teeGround(h) {
+  const group = new THREE.Group()
+  const pad = new THREE.Mesh(
+    grassUVs(new THREE.LatheGeometry([[0, 0.07], [2.55, 0.07], [2.75, 0.04], [2.85, -0.02], [2.9, -0.06]].map(([x, y]) => new THREE.Vector2(x, y)), 40)),
+    grassMaterial({ color: COLORS.tee, patch: 0.05, bump: 0.5, side: THREE.DoubleSide })
+  )
+  pad.receiveShadow = true
+  group.add(pad)
+  for (const s of [-1, 1]) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.18, 16, 12), new THREE.MeshStandardMaterial({ color: s < 0 ? '#ff5c8a' : '#2ad1c9', roughness: 0.3 }))
+    m.position.set(s * 2.1, 0.15, -1.6)
+    m.castShadow = true
+    group.add(m)
+  }
+  const peg = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.01, 0.06, 8), new THREE.MeshStandardMaterial({ color: '#ffd23f' }))
+  peg.position.set(0, 0.09, 0)
+  group.add(peg)
+  group.position.set(h.tee.x, 0, -h.tee.z)
+  // Turned so the markers sit either side of the line to the pin (three.js z is game -z).
+  group.rotation.y = -Math.atan2(h.cup.x - h.tee.x, h.cup.z - h.tee.z)
   return group
 }
 

@@ -81,13 +81,13 @@ function ballSpeed(club, power) {
 /**
  * The ball: { speed, launch, dir, tilt } plus its whole flight (simulate()) and a summary in yards.
  * aim is the player's aim (deg from downrange, + right); face and path are relative to it.
- * o.from: where it's struck (the tee by default); o.cup: a hole it can roll into.
+ * o.from: where it's struck (the tee by default); o.cup: a hole it can roll into; o.wind: { x, z } m/s.
  */
-export function strike({ power, face, path }, club, aim = 0, hand = 'R', B = TUNING.ball, { from = null, cup = null } = {}) {
+export function strike({ power, face, path }, club, aim = 0, hand = 'R', B = TUNING.ball, { from = null, cup = null, wind = null } = {}) {
   const start = B.startShare * face + (1 - B.startShare) * path
   const curve = face - path
   const ball = { speed: ballSpeed(club, power), launch: launchAt(club, Math.round(power * 100) / 100), dir: aim + start, tilt: clamp(curve * B.curvePerDeg, -B.maxTilt, B.maxTilt) }
-  const flight = simulate(ball, club, B, { from, cup })
+  const flight = simulate(ball, club, B, { from, cup, wind })
   const aimRad = (aim * Math.PI) / 180
   const ox = from?.x ?? 0
   const oz = from?.z ?? 0
@@ -104,4 +104,30 @@ export function strike({ power, face, path }, club, aim = 0, hand = 'R', B = TUN
     offline: Math.round(offline(flight.rest)) || 0,
     apex: Math.round(flight.apex / YD)
   }
+}
+
+/**
+ * The bar's power (0–`max`, the share of a full backswing) that sends a square shot with this
+ * club as far as `yards` along `line`, roll included, from this lie and in this wind; null when
+ * even a full swing comes up short. o: { from, wind, lie: the share of the swing the lie lets
+ * through (course.js liePower) }. It's the pin's mark on the power bar.
+ */
+export function powerFor(yards, club, line = 0, { from = null, wind = null, lie = 1, max = 1 } = {}) {
+  const ox = from?.x ?? 0
+  const oz = from?.z ?? 0
+  const a = (line * Math.PI) / 180
+  // How far along the line a swing of this bar power finishes (yards).
+  const reach = (p) => {
+    const r = strike({ power: Math.max(TUNING.swing.minPower, p * lie), face: 0, path: 0 }, club, line, 'R', TUNING.ball, { from, wind }).flight.rest
+    return ((r.x - ox) * Math.sin(a) + (r.z - oz) * Math.cos(a)) / YD
+  }
+  let lo = Math.ceil(TUNING.swing.minPower * 100)
+  let hi = Math.round(max * 100)
+  if (reach(hi / 100) < yards) return null
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (reach(mid / 100) < yards) lo = mid + 1
+    else hi = mid
+  }
+  return lo / 100
 }

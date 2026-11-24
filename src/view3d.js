@@ -228,6 +228,8 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
    *   radians, for where the others stand); the tee by default
    * o.flag: on the course, the pin to show from anywhere ({ cup: {x, z}, green })
    * o.targets: false hides the range's target greens (the course)
+   * o.course: { hole: which of course.js HOLES is out there, sand, tee: its bunkers and its own tee }
+   * o.fly: mode 'flyover', the sweep down a new hole: { tee, cup: {x, z}, k: 0 → 1 }
    * o.aim: degrees; o.ball: {x,y,z} | null; o.trail: points so far; o.ground: ground height under the ball
    * o.golfer: the look ({ id, color, outfit }) at the tee; o.waiting: the looks waiting beside it;
    * o.face: the golfer's expression (characters.js FACES); o.swing: the golfer's
@@ -255,6 +257,7 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
     const teeY = o.tee ? groundHeight(tee.x, tee.z) : 0
     scenery.setPutting(Boolean(P) && G === GREEN)
     scenery.setTargets(o.targets !== false)
+    scenery.setCourse(o.course?.hole ?? -1, o.course ?? {})
     aim.visible = o.mode === 'address' && !P
     aim.rotation.y = -aimRad
     aim.position.set(tee.x, teeY, -tee.z)
@@ -427,6 +430,21 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
       want.pos.set(b.x - ps * back, b.y + (o.mode === 'roll' ? 1.8 : 2.6), -(b.z - pc * back))
       want.look.set(b.x + ps * ahead, b.y, -(b.z + pc * ahead))
       follow(o.dt, o.mode === 'roll' ? 2.6 : 2)
+    } else if (o.mode === 'flyover' && o.fly) {
+      // A new hole: from over the green, back down the hole to behind the tee, always looking up
+      // it toward the pin (so it ends where the address camera starts).
+      const F = o.fly
+      const len = Math.hypot(F.cup.x - F.tee.x, F.cup.z - F.tee.z) || 1
+      const ux = (F.cup.x - F.tee.x) / len
+      const uz = (F.cup.z - F.tee.z) / len
+      const e = F.k * F.k * (3 - 2 * F.k)
+      // Along the hole: from 26 m short of the pin back to behind the tee; high in the middle.
+      const d = (len - 26) * (1 - e) - C.back * e
+      const high = 9 * (1 - e) + C.height * e + Math.sin(Math.PI * e) * Math.min(22, len * 0.12)
+      const lookAt = (len + 4) * (1 - e) + 60 * e
+      want.pos.set(F.tee.x + ux * d, groundHeight(F.tee.x + ux * d, F.tee.z + uz * d) + high, -(F.tee.z + uz * d))
+      want.look.set(F.tee.x + ux * Math.max(lookAt, d + 20), 0.5, -(F.tee.z + uz * Math.max(lookAt, d + 20)))
+      follow(o.dt, lastMode !== 'flyover' ? 999 : 8)
     } else if (o.mode === 'fixed') {
       // Art: the camera stays where pose() put it.
     } else if (o.mode === 'title') {

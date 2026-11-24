@@ -156,6 +156,16 @@ export const TUNING = {
     // The phone's swing reader for a putting stroke (sent as party.public.swing): small and slow.
     reader: { still: 12, start: 15, minBack: 3, reverse: 12, minHit: 20, backMs: 4000, downMs: 2000, axisPrior: 3 }
   },
+  // The wind (course.js): mph on screen, metres a second in the flight; `gain` exaggerates it a
+  // little, 10 mph across moves a 7-iron about 8 yards, in your face costs it about 13. Putts don't feel it.
+  wind: { mps: 0.447, gain: 1 },
+  // How much of a swing a lie lets through (course.js liePower): sand needs a wedge.
+  lie: { rough: 0.9, sand: { sw: 0.95, pw: 0.8, other: 0.6 } },
+  // A ball landing in a bunker: it keeps this share of its speed, hardly hops, and the sand drags it to a stop.
+  bunker: { keep: 0.3, bounce: 0.06, roll: 16 },
+  course: { flyover: 4.5, card: 7 }, // seconds: the sweep down a new hole, and the scorecard between holes
+  pin: { balls: 6 }, // Closest to the pin: balls each (course.js PIN has the spots)
+  practice: { show: 5 }, // seconds a practice swing's read stays on the TV
   flick: { full: 2600, faceGain: 0.6 }, // mouse/touch: px/s for a full-power flick
   camera: { back: 5.2, height: 1.9, side: 0.9, follow: 14, followHeight: 4.5, fov: 52 },
   flightSpeed: 1.6, // the ball flies this much faster than real time (arcade)

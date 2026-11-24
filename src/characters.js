@@ -12,6 +12,7 @@ import * as THREE from 'three'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 
 import { BLINKS, drawFace, FACES, INK } from './beans/faces.js'
+import { reactionPose } from './reactions.js'
 
 // ---- the bean's shape ------------------------------------------------------------------------
 
@@ -423,26 +424,13 @@ export function makeBean(def) {
       let tilt = 0
       if (react.kind) {
         react.t += dt
-        const k = react.t
-        if (react.kind === 'cheer') {
-          hop = Math.max(0, Math.sin(Math.min(k, 1.2) * Math.PI * 2.5)) * 0.35
-          spin = Math.min(1, k / 0.9) * Math.PI * 2
-          sy += Math.max(0, Math.sin(k * 14)) * 0.06 * Math.max(0, 1 - k)
-          if (k > 1.6) react.kind = null
-        } else if (react.kind === 'happy') {
-          hop = Math.max(0, Math.sin(Math.min(k, 0.4) * Math.PI * 2.5)) * 0.18
-          if (k > 1.2) react.kind = null
-        } else if (react.kind === 'sad') {
-          const w = Math.min(1, k / 0.3) * (k < 1.6 ? 1 : Math.max(0, 1 - (k - 1.6) / 0.4))
-          sy -= 0.12 * w
-          tilt = 0.25 * w
-          if (k > 2) react.kind = null
-        } else if (react.kind === 'wince') {
-          const w = Math.min(1, k / 0.12) * Math.max(0, 1 - Math.max(0, k - 0.9) / 0.5)
-          sy -= 0.06 * w
-          tilt = -0.12 * w
-          if (k > 1.6) react.kind = null
-        }
+        // reactions.js: crouch, arc, squash and settle; droops and flinches eased in and out.
+        const r = reactionPose(react.kind, react.t)
+        hop = r.hop
+        spin = r.spin
+        tilt = r.tilt
+        sy *= r.sy
+        if (r.done) react.kind = null
       }
       lean.position.y = hop
       lean.scale.set(1 + (1 - sy) * 0.6, sy, 1 + (1 - sy) * 0.6)
@@ -554,25 +542,13 @@ export function makeModelBean(kit, def) {
       let tilt = 0
       if (react.kind) {
         react.t += dt
-        const k = react.t
-        if (react.kind === 'cheer') {
-          hop = Math.max(0, Math.sin(Math.min(k, 1.2) * Math.PI * 2.5)) * 0.35
-          spin = Math.min(1, k / 0.9) * Math.PI * 2
-          if (k > 1.6) react.kind = null
-        } else if (react.kind === 'happy') {
-          hop = Math.max(0, Math.sin(Math.min(k, 0.4) * Math.PI * 2.5)) * 0.18
-          if (k > 1.2) react.kind = null
-        } else if (react.kind === 'sad') {
-          const w = Math.min(1, k / 0.3) * (k < 1.6 ? 1 : Math.max(0, 1 - (k - 1.6) / 0.4))
-          sy -= 0.12 * w
-          tilt = 0.25 * w
-          if (k > 2) react.kind = null
-        } else if (react.kind === 'wince') {
-          const w = Math.min(1, k / 0.12) * Math.max(0, 1 - Math.max(0, k - 0.9) / 0.5)
-          sy -= 0.06 * w
-          tilt = -0.12 * w
-          if (k > 1.6) react.kind = null
-        }
+        // reactions.js: crouch, arc, squash and settle; droops and flinches eased in and out.
+        const r = reactionPose(react.kind, react.t)
+        hop = r.hop
+        spin = r.spin
+        tilt = r.tilt
+        sy *= r.sy
+        if (r.done) react.kind = null
       }
       lean.position.y = hop
       lean.scale.set(1 + (1 - sy) * 0.6, sy, 1 + (1 - sy) * 0.6)

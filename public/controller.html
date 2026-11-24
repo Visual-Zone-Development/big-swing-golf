@@ -1,0 +1,962 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <!-- Seaside Swing's phone screen: the phone is the club. On your turn: pick a club, aim with
+         ◀ ▶, then hold SET with your thumbs (phone held like a club grip, screen facing you,
+         top pointing at the ball) and swing. createSwingReader() reads the swing from the gyro
+         at the full sensor rate and sends { shot: { speed, peak, face, path, back, tempo, hand } }
+         the moment the club comes back through the ball. Letting go of SET first cancels.
+         No sensors (plain http, a desktop browser, permission denied): a touch pad, pull down
+         and flick up. Held input (party.inputs[id]): { st, a: SET held, sw: swing angle, ax: aim
+         -1/0/1, still, ph }. It shows which Shape crew golfer you are (mine.golfer), and a safety
+         card before your first swing of a party (until mine.safe; "I'm ready" sends { safe }), and
+         whatever menu the TV has open (public.menu) as buttons, sent back as { menu }. Messages: { club: i }, { shot }, { flick: { power, face } },
+         { pause } / { resume } / { again }, { pong, pt }. One file, everything inline. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <style>
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body { margin: 0; height: 100%; background: #16305a; color: #fff8ec; font: 18px/1.35 system-ui, sans-serif; overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: none; }
+      main { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 14px calc(14px + env(safe-area-inset-bottom, 0px)); max-width: 560px; margin: 0 auto; }
+      main.ask { padding-bottom: 110px; }
+      .bar { display: flex; align-items: center; gap: 10px; font-weight: 800; }
+      .dot { width: 18px; height: 18px; border-radius: 50%; border: 3px solid #0b1a36; flex: none; background: var(--me, #ffd23f); }
+      .chip { margin-left: auto; padding: 6px 12px; border-radius: 999px; background: #24467d; font-size: 15px; white-space: nowrap; }
+      .chip.on { background: #b6f04a; color: #0b1a36; }
+      .chip.warn { background: #ffd23f; color: #0b1a36; }
+      .chip.bad { background: #ff5c8a; color: #0b1a36; }
+      .card { background: #24467d; border-radius: 20px; padding: 12px 16px; }
+      h1 { margin: 0; font-size: 26px; line-height: 1.1; }
+      .hint { margin: 6px 0 0; color: #bcd0f2; font-weight: 600; font-size: 16px; }
+      .stage { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+      button { font: inherit; font-weight: 800; border: 0; border-radius: 16px; color: #0b1a36; background: #2ad1c9; padding: 12px 16px; min-height: 52px; }
+      button:active { filter: brightness(0.9); }
+      .clubs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; width: 100%; }
+      .clubs button { min-height: 50px; padding: 6px 4px; background: #24467d; color: #fff8ec; font-size: 17px; line-height: 1.05; }
+      .clubs button small { display: block; font-size: 12px; font-weight: 600; color: #bcd0f2; }
+      .clubs button.on { background: #ffd23f; color: #0b1a36; }
+      .clubs button.on small { color: #4a3a00; }
+      .aim { display: flex; gap: 10px; width: 100%; align-items: center; }
+      .aim button { flex: none; width: 76px; font-size: 26px; background: #24467d; color: #fff8ec; }
+      .aim span { flex: 1; text-align: center; font-weight: 800; font-size: 20px; }
+      #set { flex: none; width: min(66vw, 32vh, 290px); aspect-ratio: 1; border-radius: 50%; font-size: 40px; background: radial-gradient(circle at 35% 30%, #c6ff7a, #8fd43a 55%, #5d9e1c); color: #0b1a36; box-shadow: 0 10px 0 #0b1a36; text-shadow: 0 2px 0 rgba(255,255,255,0.35); display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; }
+      #set small { font-size: 16px; margin-top: 6px; }
+      #set.down { transform: translateY(7px) scale(0.97); box-shadow: 0 3px 0 #0b1a36; background: radial-gradient(circle at 35% 30%, #ffe28a, #ffd23f 55%, #d9a514); }
+      #set.hit { background: radial-gradient(circle at 35% 30%, #ff9ab8, #ff5c8a 55%, #c9305e); color: #fff8ec; }
+      #pad { width: min(84vw, 44vh, 360px); aspect-ratio: 0.85; border-radius: 26px; background: #24467d; border: 4px dashed #bcd0f2; display: flex; align-items: center; justify-content: center; text-align: center; color: #bcd0f2; font-weight: 800; padding: 20px; touch-action: none; }
+      #meter { position: relative; width: min(80vw, 340px); height: 16px; border-radius: 8px; background: #0b1a36; overflow: hidden; }
+      #meter .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: #ffd23f; }
+      #feet { margin-top: 6px; font-size: 20px; font-weight: 800; color: #ffd23f; text-align: center; }
+      #meter .mark { position: absolute; top: 0; bottom: 0; width: 5px; margin-left: -2px; border-radius: 3px; background: #fff8ec; box-shadow: 0 0 0 2px #0b1a36; }
+      #readout { min-height: 24px; font-weight: 800; color: #ffd23f; text-align: center; }
+      .scores { display: grid; gap: 6px; }
+      .score { display: flex; align-items: center; gap: 10px; background: #24467d; border-radius: 14px; padding: 9px 14px; font-weight: 800; font-size: 19px; }
+      .score.turn { outline: 4px solid #ffd23f; }
+      .score b { margin-left: auto; font-size: 22px; }
+      .row { display: flex; gap: 10px; }
+      .row button { flex: 1; }
+      .pause { background: #bcd0f2; }
+      #again { background: #ffd23f; font-size: 24px; }
+      #safety { position: absolute; inset: 0; z-index: 5; background: #16305a; display: flex; flex-direction: column; gap: 14px; padding: 22px 18px calc(22px + env(safe-area-inset-bottom, 0px)); overflow-y: auto; }
+      #safety h1 { font-size: 30px; color: #ffd23f; }
+      #safety .tip { display: flex; gap: 14px; align-items: flex-start; background: #24467d; border-radius: 18px; padding: 14px 16px; }
+      #safety .tip b { display: block; font-size: 20px; margin-bottom: 2px; }
+      #safety .tip span { color: #bcd0f2; font-weight: 600; font-size: 16px; }
+      #safety .badge { flex: none; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 900; color: #0b1a36; font-size: 20px; }
+      #ready { margin-top: auto; background: #b6f04a; font-size: 26px; min-height: 68px; }
+      #menu { position: absolute; inset: 0; z-index: 6; background: #16305a; display: flex; flex-direction: column; gap: 10px; padding: 22px 18px calc(22px + env(safe-area-inset-bottom, 0px)); overflow-y: auto; }
+      #menu h1 { font-size: 30px; color: #ffd23f; margin-bottom: 6px; }
+      #menu-items { display: flex; flex-direction: column; gap: 10px; }
+      #menu-items > button { background: #24467d; color: #fff8ec; font-size: 21px; min-height: 58px; text-align: left; padding: 10px 18px; }
+      #menu-items > button.sel { outline: 4px solid #ffd23f; }
+      #menu-items > button.card { display: flex; align-items: center; gap: 14px; min-height: 84px; padding: 12px 16px; }
+      #menu-items > button.card .icon { flex: none; width: 54px; height: 54px; border-radius: 16px; background: #16305a; display: flex; align-items: center; justify-content: center; font-size: 30px; }
+      #menu-items > button.card b { display: block; font-size: 22px; }
+      #menu-items > button.card small { display: block; margin-top: 3px; font-size: 16px; font-weight: 600; color: #bcd0f2; }
+      #menu-items > button.card.sel { background: #ffd23f; color: #0b1a36; outline: none; }
+      #menu-items > button.card.sel small { color: #3a3216; }
+      #menu-items .value { display: flex; align-items: center; gap: 8px; background: #24467d; border-radius: 16px; padding: 6px 6px 6px 18px; font-weight: 800; font-size: 19px; }
+      #menu-items .value.sel { outline: 4px solid #ffd23f; }
+      #menu-items .value span { flex: 1; }
+      #menu-items .value em { font-style: normal; color: #ffd23f; min-width: 74px; text-align: center; }
+      #menu-items .value button { min-height: 48px; width: 52px; padding: 0; font-size: 24px; background: #16305a; color: #fff8ec; }
+      #wardrobe { position: absolute; inset: 0; z-index: 4; background: #16305a; display: flex; flex-direction: column; gap: 14px; padding: 22px 18px calc(22px + env(safe-area-inset-bottom, 0px)); overflow-y: auto; }
+      #wardrobe h1 { font-size: 30px; color: var(--me, #ffd23f); }
+      #wardrobe h2 { margin: 4px 0 0; font-size: 17px; color: #bcd0f2; text-transform: uppercase; letter-spacing: 0.08em; }
+      #wardrobe .opts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+      #wardrobe .opts button { min-height: 64px; padding: 8px 6px; font-size: 16px; line-height: 1.15; background: #24467d; color: #fff8ec; }
+      #wardrobe .opts button.on { background: var(--me, #ffd23f); color: #0b1a36; outline: 3px solid #fff8ec; }
+      #wardrobe .opts button span { display: block; font-size: 26px; margin-bottom: 2px; }
+      #wardrobe .opts.two { grid-template-columns: repeat(2, 1fr); }
+      #wardrobe-done { margin-top: auto; background: #b6f04a; font-size: 24px; min-height: 64px; }
+      .dress { background: #ffd23f; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main id="main">
+      <div class="bar"><span class="dot"></span><span id="name"></span><span class="chip" id="state">Starting…</span></div>
+      <div class="card"><h1 id="title">Seaside Swing</h1><p class="hint" id="hint">Look at the TV.</p></div>
+      <div class="stage" id="stage">
+        <div class="clubs" id="clubs"></div>
+        <div class="aim"><button data-aim="-1" aria-label="Aim left">◀</button><span id="aim">Aim straight</span><button data-aim="1" aria-label="Aim right">▶</button></div>
+        <button id="set">SET<small>hold &amp; swing</small></button>
+        <div id="pad" hidden>Pull down, then flick up to swing.<br />Flick left or right of straight to hook or slice.</div>
+        <div id="meter"><div class="fill" id="fill"></div><div class="mark" id="mark" hidden></div></div><div id="feet" hidden></div>
+        <div id="readout"></div>
+      </div>
+      <div class="scores" id="scores"></div>
+      <button id="again" hidden>Play again</button>
+      <div class="row" id="playrow"><button class="dress" id="dress">Wardrobe</button><button class="pause" id="pause">Pause</button></div>
+      <section id="wardrobe" hidden aria-labelledby="wardrobe-title">
+        <h1 id="wardrobe-title">Dress your bean</h1>
+        <div id="wardrobe-slots"></div>
+        <button id="wardrobe-done">Done</button>
+      </section>
+      <section id="menu" hidden aria-labelledby="menu-title">
+        <h1 id="menu-title"></h1>
+        <div id="menu-items"></div>
+      </section>
+      <section id="safety" hidden aria-labelledby="safety-title">
+        <h1 id="safety-title">Before you swing</h1>
+        <div class="tip"><span class="badge" style="background:#2ad1c9"><svg width="26" height="26" viewBox="-13 -13 26 26" fill="none" stroke="#0b1a36" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><circle cx="0" cy="-7" r="3" fill="#0b1a36" stroke="none"/><path d="M0 -3V5M-9 -1H9M0 5L-5 11M0 5L5 11"/></svg></span><div><b>Give yourself room</b><span>Stand where a full swing can’t reach anyone or anything: people, pets, the TV, lamps.</span></div></div>
+        <div class="tip"><span class="badge" style="background:#ff5c8a"><svg width="26" height="26" viewBox="-13 -13 26 26" fill="none" stroke="#0b1a36" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><rect x="-4" y="-10" width="8" height="15" rx="2"/><circle cx="-5" cy="3" r="3.5" fill="#0b1a36" stroke="none"/><circle cx="5" cy="3" r="3.5" fill="#0b1a36" stroke="none"/></svg></span><div><b>Hold on tight</b><span>Grip your phone in both hands all the way through the swing. A grippy case or a wrist strap helps.</span></div></div>
+        <div class="tip"><span class="badge" style="background:#b6f04a"><svg width="26" height="26" viewBox="-13 -13 26 26" fill="none" stroke="#0b1a36" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M-10 -2A11 11 0 0 0 10 -2"/><circle cx="10" cy="-6" r="2.6" fill="#0b1a36" stroke="none"/></svg></span><div><b>Smooth beats hard</b><span>A smooth swing reads just as well as a wild one. Never let go of the phone.</span></div></div>
+        <button id="ready">I’m ready</button>
+      </section>
+    </main>
+    <script>
+      // This screen draws its own menus and safety card: keep controller.js's built-in ones off.
+      controller.menuScreen = false
+      controller.safetyScreen = false
+      const $ = (id) => document.getElementById(id)
+      const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
+      const round = (v, k = 10) => Math.round(v * k) / k
+      const DEFAULT_BETA = 35
+
+      // ==== phone motion =========================================================================
+      /**
+       * Reads the phone's motion sensors and turns them into what a game needs. Every sensor event
+       * is used (60-200 a second, not one reading per network message), each with its own time, so
+       * a swing's moment is known to the millisecond. It also:
+       *   - takes readings from the join page (which iOS sends them to) or from this frame (which
+       *     Android sends them to once it's tapped), whichever is fresh;
+       *   - turns axes with the screen, so landscape doesn't rotate swipes;
+       *   - learns the gyro's drift while the phone lies still and takes it off;
+       *   - gives tilt as the direction of "up" (no gimbal flip near upright), gyro aiming as
+       *     running totals (a lost message loses nothing), a live strength, and stillness;
+       *   - hands every sample to onSample({ t, dt, a, w, up, wd, ud }) for gestures of the game's
+       *     own: a, w (deg/s about x, y, z) and up in screen axes, and wd / ud the same turn and up
+       *     in the phone's own axes, which don't jump if the screen rotates in the middle of a swing.
+       * Live tuning comes from cfg() (the TV's controller.public.cfg), so nothing here is fixed.
+       */
+      function createPhoneMotion({ cfg, onSwing, onChange, onSample = () => {} }) {
+        const pm = {
+          state: 'waiting', // waiting | ask | on | touch:unsupported | touch:denied | touch:insecure
+          ori: { b: DEFAULT_BETA, g: 0, a: undefined },
+          up: null, // [x, y, z], screen axes: x right, y up the screen, z out of it
+          gyro: { x: 0, y: 0, on: false },
+          m: 0, // strength now (m/s², or the gyro's equivalent when the station counts turning)
+          still: false,
+          hz: 0,
+          bias: 0, // deg/s of gyro drift being taken off
+          angle: 0, // screen rotation, degrees
+          last: -1e9 // performance.now() of the newest reading
+        }
+        const direct = { last: -1e9, ori: null }
+        const bias = [0, 0, 0]
+        const hist = []
+        let lastT = -Infinity
+        let stillFor = 0
+        let restFor = 0
+        let count = 0
+        let countAt = performance.now()
+        let grav = null
+        let swing = null
+        let cooldown = -Infinity
+        const set = (st) => {
+          if (pm.state === st) return
+          pm.state = st
+          onChange()
+        }
+
+        parent.postMessage({ type: 'motion', on: true }, '*')
+        addEventListener('message', (e) => {
+          if (e.source !== parent || e.data?.type !== 'motion') return
+          const d = e.data
+          if (d.state) set(d.state === 'on' || d.state === 'ask' || d.state === 'waiting' ? d.state : 'touch:' + d.state)
+          if (performance.now() - direct.last < 150) return // this frame hears the sensors itself
+          const at = performance.now()
+          if (Array.isArray(d.s) && d.s.length) for (const s of d.s) sample(at - (s.age || 0), s.a, s.g, s.w, s.o)
+          else if (d.r) sample(at, [d.r.x, d.r.y, d.r.z], null, null, [d.r.b, d.r.g, null]) // an older join page
+        })
+        // Android only sends sensor events to the focused frame: listen here too.
+        addEventListener('deviceorientation', (e) => {
+          if (typeof e.beta !== 'number') return
+          direct.ori = [e.beta, e.gamma ?? 0, typeof e.alpha === 'number' ? e.alpha : null]
+        })
+        const vec = (v, ...k) => (v && typeof v[k[0]] === 'number' ? k.map((n) => v[n]) : null)
+        addEventListener('devicemotion', (e) => {
+          const a = vec(e.acceleration, 'x', 'y', 'z')
+          const g = vec(e.accelerationIncludingGravity, 'x', 'y', 'z')
+          const w = vec(e.rotationRate, 'alpha', 'beta', 'gamma')
+          if (!a && !g && !w) return
+          direct.last = performance.now()
+          sample(e.timeStamp || direct.last, a, g, w, direct.ori)
+        })
+        try {
+          screen.orientation?.lock?.('portrait').catch(() => {})
+        } catch {}
+
+        /** Device x/y → screen x/y: the phone turned to landscape turns its axes with it. */
+        function toScreen(x, y) {
+          const r = (pm.angle * Math.PI) / 180
+          const c = Math.cos(r)
+          const s = Math.sin(r)
+          return [x * c - y * s, x * s + y * c]
+        }
+
+        function sample(t, a, g, w, o) {
+          if (t <= lastT - 1) return // already seen (both sources overlapping)
+          const dt = clamp((t - (lastT > -Infinity ? lastT : t - 16)) / 1000, 0.001, 0.05)
+          lastT = t
+          pm.last = performance.now()
+          if (pm.state !== 'on' && !pm.state.startsWith('touch')) set('on')
+          if (pm.state.startsWith('touch')) return
+          count++
+          if (pm.last - countAt >= 1000) {
+            pm.hz = Math.round((count * 1000) / (pm.last - countAt))
+            count = 0
+            countAt = pm.last
+          }
+          pm.angle = screen.orientation?.angle ?? (typeof window.orientation === 'number' ? window.orientation : 0)
+          if (o) pm.ori = { b: o[0], g: o[1], a: typeof o[2] === 'number' ? o[2] : undefined }
+          // Movement without gravity. Some phones only give it with gravity: take a slow average off.
+          if (!a && g) {
+            grav = grav ? grav.map((v, i) => v + (g[i] - v) * 0.08) : [...g]
+            a = g.map((v, i) => v - grav[i])
+          }
+          a ??= [0, 0, 0]
+          // Up, from the phone's own (sensor-fused) orientation: in the phone's own axes (upDev)
+          // and in screen axes (pm.up).
+          const rb = (pm.ori.b * Math.PI) / 180
+          const rg = (pm.ori.g * Math.PI) / 180
+          const upDev = [-Math.sin(rg) * Math.cos(rb), Math.sin(rb), Math.cos(rg) * Math.cos(rb)]
+          const [ux, uy] = toScreen(upDev[0], upDev[1])
+          pm.up = [ux, uy, upDev[2]]
+          const [ax, ay] = toScreen(a[0], a[1])
+          const az = a[2]
+          const am = Math.hypot(ax, ay, az)
+          // Directions in the room, not the phone: up is toward the ceiling (along "up"), right is
+          // the screen's right edge levelled. So a flick up reads as up whether the phone is held
+          // upright or flat like a remote (where the phone's own y axis points forward).
+          const [qx, qy, qz] = pm.up
+          const rx = 1 - qx * qx
+          const ry = -qx * qy
+          const rz = -qx * qz
+          const rl = Math.hypot(rx, ry, rz) || 1
+          const dx = (ax * rx + ay * ry + az * rz) / rl
+          const dy = ax * qx + ay * qy + az * qz
+
+          // Gyro: turning about the phone's own x, y and z, in deg/s. The browser names these rates
+          // alpha, beta, gamma, and (unlike the orientation angles of the same names) that is x, y, z
+          // in that order: the spec's getters, Chromium and WebKit all agree (a real-phone test in
+          // Motion Lab 1.9.1 found the old z, x, y reading scrambled every gyro feature).
+          let wx = 0
+          let wy = 0
+          let wz = 0
+          let turnDev = [0, 0, 0]
+          let wm = 0
+          if (w) {
+            const raw = Math.hypot(w[0] - bias[0], w[1] - bias[1], w[2] - bias[2])
+            // Lying still: what the gyro reads is drift. Learn it slowly and take it off.
+            stillFor = raw < 4 && am < 0.35 ? stillFor + dt : 0
+            // Drift is only learned when the phone is truly at rest (on a table, not in a hand
+            // aiming slowly), slowly, and never more than a real gyro drifts: otherwise a steady
+            // aim gets "corrected" away.
+            restFor = Math.hypot(...w) < 1.5 && am < 0.15 ? restFor + dt : 0
+            if (restFor > 1.5) for (let i = 0; i < 3; i++) bias[i] = clamp(bias[i] + (w[i] - bias[i]) * Math.min(1, dt * 0.3), -1.5, 1.5)
+            pm.bias = round(Math.hypot(...bias))
+            turnDev = [w[0] - bias[0], w[1] - bias[1], w[2] - bias[2]]
+            ;[wx, wy] = toScreen(turnDev[0], turnDev[1])
+            wz = turnDev[2]
+            wm = Math.hypot(wx, wy, wz)
+            gyroAim(wx, wy, wz, dt)
+          } else stillFor = am < 0.35 ? stillFor + dt : 0
+          pm.still = stillFor > 0.25
+          const c = cfg()
+          pm.m = Math.max(am, wm * (c.gk ?? 0))
+          detect(t, pm.m, ax, ay, az, dx, dy, wm, c)
+          onSample({ t, dt, a: [ax, ay, az], w: [wx, wy, wz], up: pm.up, wd: turnDev, ud: upDev })
+        }
+
+        /**
+         * Gyro aiming, the way Steam Input and JoyShockMapper do it: turning speed moves the sight
+         * like a mouse. Left/right is turning around the real vertical, so it works however the
+         * phone is held; up/down is tipping the top. Tremor is tightened toward zero, slow moves
+         * are smoothed and fast ones go straight through.
+         */
+        function gyroAim(wx, wy, wz, dt) {
+          const c = cfg()
+          const [ux, uy, uz] = pm.up
+          let yaw = wx * ux + wy * uy + wz * uz // turning left is positive
+          let pitch = wx // tipping the top up is positive
+          const speed = Math.hypot(yaw, pitch)
+          const tighten = c.tighten ?? 1.5
+          if (speed < tighten && speed > 0) {
+            yaw *= speed / tighten
+            pitch *= speed / tighten
+          }
+          hist.push([yaw, pitch])
+          if (hist.length > 4) hist.shift()
+          const avg = hist.reduce((s, v) => [s[0] + v[0] / hist.length, s[1] + v[1] / hist.length], [0, 0])
+          const k = clamp((speed - (c.smoothLo ?? 4)) / ((c.smoothHi ?? 12) - (c.smoothLo ?? 4)), 0, 1)
+          pm.gyro.x -= (yaw * k + avg[0] * (1 - k)) * dt
+          pm.gyro.y -= (pitch * k + avg[1] * (1 - k)) * dt
+          pm.gyro.on = true
+        }
+
+        /**
+         * A swing starts when the strength passes the threshold. 'peak' swings (flicks, shakes) end
+         * when it fades and are timed at their strongest moment. 'flip' swings (a bat) are timed
+         * where the push turns into the stop, the fastest moment of the swing, which is when the
+         * acceleration reverses, or for a mostly turning swing when the turning peaks. The readings
+         * that push the same way as the first one give the direction.
+         */
+        function detect(t, m, ax, ay, az, dx, dy, wm, c) {
+          const thr = c.thr ?? 12
+          if (!swing) {
+            if (m >= thr && t > cooldown) swing = { t0: t, m, peakT: t, fx: ax, fy: ay, fz: az, px: dx, py: dy, sx: dx, sy: dy, k: 1, wPeak: wm, wPeakT: t, flipT: 0 }
+            return
+          }
+          const s = swing
+          if (m > s.m) {
+            s.m = m
+            s.peakT = t
+          }
+          if (wm > s.wPeak) {
+            s.wPeak = wm
+            s.wPeakT = t
+          }
+          if (dx * s.px + dy * s.py > 0) {
+            s.sx += dx
+            s.sy += dy
+            s.k++
+          }
+          const flip = c.at === 'flip'
+          const pushed = Math.hypot(s.fx, s.fy, s.fz) > thr * 0.5
+          if (flip && !s.flipT) {
+            if (pushed && ax * s.fx + ay * s.fy + az * s.fz < 0) s.flipT = t
+            else if (!pushed && s.wPeak > 0 && wm < s.wPeak * 0.6) s.flipT = s.wPeakT
+          }
+          const dur = t - s.t0
+          const done = flip ? s.flipT || dur >= (c.winMs ?? 260) : (m < thr * 0.5 && dur >= 8) || dur >= (c.peakMs ?? 110)
+          if (!done) return
+          swing = null
+          cooldown = t + (c.cd ?? 200)
+          const sign = c.inv ? -1 : 1
+          // The average push (not the sum, which would grow with the sensor rate).
+          const ex = (s.sx / s.k) * sign
+          const ey = (s.sy / s.k) * sign
+          let dir = null
+          if (Math.max(Math.abs(ex), Math.abs(ey)) > (c.dz ?? 2)) dir = Math.abs(ex) > Math.abs(ey) ? (ex > 0 ? 'right' : 'left') : ey > 0 ? 'up' : 'down'
+          const full = c.full ?? 32
+          const at = flip ? s.flipT || s.wPeakT : s.peakT
+          onSwing({ dir, p: clamp((s.m - thr) / (full - thr), 0.15, 1), m: s.m, pt: at, raw: { x: round(s.px), y: round(s.py), z: round(s.fz), w: Math.round(s.wPeak) } })
+        }
+        return pm
+      }
+      // ==== end phone motion =====================================================================
+
+      // ==== swing reader =========================================================================
+      /**
+       * The club swing, read from the gyro while SET is held. The phone is held like a club grip,
+       * so it turns exactly as the club does. Nothing assumes how it's held except one thing:
+       * that its screen's left-right edge lies along the target line at address (only the swing
+       * path uses that). Per sample ({ t ms, dt s, w deg/s, up } in the phone's axes):
+       *   address  held still: "up" is learned (the room's vertical, in the phone's axes)
+       *   back     turning: the backswing; its axis and size are measured
+       *   down     turning the other way, hard: the downswing. Its axis gives the swing plane, and
+       *            from it and "up" the shaft (down the plane) and the target line (where the club
+       *            head travels). Impact is the moment the swing angle comes back to address,
+       *            which is where the ball was (or the fastest moment, if the gyro tops out first).
+       * At impact it reports, in degrees and deg/s:
+       *   speed  how fast the club turns at impact (power)
+       *   face   which way the club face points vs. at address (+ = right of the target line):
+       *          measured as a change, so it doesn't depend on the hold at all
+       *   path   which way the club head travels vs. the screen's edge at address (+ = right)
+       *   back   backswing size, tempo = backswing time / downswing time, hand 'R' or 'L'
+       * The phone's orientation is integrated as a quaternion from address, so big swings (past
+       * 180°) and turning in two axes at once (arms and wrists) come out right.
+       */
+      function createSwingReader(opts = () => ({})) {
+        const D = 180 / Math.PI
+        const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+        const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        const len = (a) => Math.hypot(a[0], a[1], a[2])
+        const scale = (a, k) => [a[0] * k, a[1] * k, a[2] * k]
+        const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+        const norm = (a) => scale(a, 1 / (len(a) || 1))
+        const flat = (a, u) => add(a, scale(u, -dot(a, u))) // a with its vertical part removed
+        // Quaternions [w, x, y, z]: q turns phone axes now into phone axes at address.
+        const qmul = (a, b) => [
+          a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+          a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+          a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+          a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0]
+        ]
+        const qnorm = (q) => {
+          const l = Math.hypot(q[0], q[1], q[2], q[3]) || 1
+          return q.map((v) => v / l)
+        }
+        const qrot = (q, v) => {
+          const p = qmul(qmul(q, [0, v[0], v[1], v[2]]), [q[0], -q[1], -q[2], -q[3]])
+          return [p[1], p[2], p[3]]
+        }
+        /** The turn w (deg/s) for dt seconds, as a quaternion. */
+        const qstep = (w, dt) => {
+          const a = (len(w) / D) * dt
+          if (a < 1e-9) return [1, 0, 0, 0]
+          const k = Math.sin(a / 2) / (len(w) / D)
+          return [Math.cos(a / 2), (w[0] / D) * k, (w[1] / D) * k, (w[2] / D) * k]
+        }
+        const qlerp = (a, b, f) => qnorm(a.map((v, i) => v + (b[i] - v) * f))
+
+        let pre = [] // the last moment before the backswing, for address
+        let st = null
+        const r = { phase: 'idle', angle: 0, back: 0, speed: 0, armed: false }
+
+        function reset(phase) {
+          st = { phase, up: null, stillUp: null, q: [1, 0, 0, 0], seq: [], back: [0, 0, 0], backMax: 0, t0: 0, tTop: 0, down: [0, 0, 0], peak: 0, peakI: -1, theta: 0, stillFor: 0 }
+          r.phase = phase
+          r.angle = 0
+          r.back = 0
+          r.speed = 0
+        }
+        reset('idle')
+
+        r.arm = () => {
+          reset('address')
+          r.armed = true
+          // Still readings from just before SET count toward address.
+          for (const s of pre) if (len(s.w) < (opts().still ?? 40)) learnUp(s)
+        }
+        r.disarm = () => {
+          r.armed = false
+          reset('idle')
+        }
+        function learnUp(s) {
+          if (!s.up) return
+          st.stillUp = st.stillUp ? norm(add(scale(st.stillUp, 0.8), scale(s.up, 0.2))) : norm(s.up)
+        }
+
+        /** Feed one sample; returns the shot at impact, else null. */
+        r.push = (s) => {
+          const c = opts()
+          pre.push(s)
+          while (pre.length && s.t - pre[0].t > 400) pre.shift()
+          if (!r.armed || st.phase === 'done') return null
+          const spin = len(s.w)
+          if (st.phase === 'address') {
+            if (spin < (c.still ?? 40)) learnUp(s)
+            if (spin < (c.start ?? 90)) return null
+            st.phase = r.phase = 'back'
+            st.up = st.stillUp ?? norm(s.up ?? [0, 1, 0])
+            st.t0 = s.t - s.dt * 1000
+          }
+          // Integrate: q now turns the phone's axes into its axes at address.
+          const qPrev = st.q
+          st.q = qnorm(qmul(st.q, qstep(s.w, s.dt)))
+          const qMid = qlerp(qPrev, st.q, 0.5)
+          const wa = qrot(qMid, s.w) // this turn, in address axes
+          st.seq.push({ t: s.t, dt: s.dt, wa, q: st.q, qPrev })
+          if (st.phase === 'back') {
+            st.back = add(st.back, scale(wa, s.dt))
+            const bax = norm(st.back)
+            const ang = st.seq.reduce((sum, x) => sum + dot(x.wa, bax) * x.dt, 0)
+            st.backMax = Math.max(st.backMax, ang)
+            r.angle = ang
+            r.back = st.backMax
+            st.stillFor = spin < (c.still ?? 40) ? st.stillFor + s.dt : 0
+            // A waggle that stopped, or a backswing that never comes down: start again from here.
+            if (st.stillFor > 0.45 || s.t - st.t0 > (c.backMs ?? 4000)) {
+              reset('address')
+              learnUp(s)
+              return null
+            }
+            if (st.backMax > (c.minBack ?? 25) && dot(wa, bax) < -(c.reverse ?? 140)) {
+              st.phase = r.phase = 'down'
+              st.tTop = s.t
+              st.topI = st.seq.length - 1
+              st.theta = ang
+            }
+            return null
+          }
+          // Downswing: its axis is the swing plane's normal, the swing angle is measured about it.
+          st.down = add(st.down, scale(wa, s.dt))
+          // Until the downswing has its own axis, assume it retraces the backswing. The wrists
+          // rolling the face back square turn the phone about the shaft at the same time; that
+          // doesn't move the club head, so take it out (twice: the shaft comes from the axis).
+          const prior = scale(norm(st.back), -(c.axisPrior ?? 20))
+          let dax = norm(add(st.down, prior))
+          for (let k = 0; k < 2; k++) {
+            const sh0 = norm(flat(scale(st.up, -1), dax))
+            let acc = prior
+            for (let i = st.topI; i < st.seq.length; i++) {
+              const x = st.seq[i]
+              const sh = qrot(x.q, sh0)
+              acc = add(acc, scale(add(x.wa, scale(sh, -dot(x.wa, sh))), x.dt))
+            }
+            dax = norm(acc)
+          }
+          const prevTheta = st.theta
+          // From address: negative at the top, zero at impact. Recomputed over the whole swing as
+          // the axis firms up, so the early guess doesn't carry an error.
+          st.theta = st.seq.reduce((sum, x) => sum + dot(x.wa, dax) * x.dt, 0)
+          const sp = dot(wa, dax)
+          r.speed = sp
+          if (sp > st.peak) {
+            st.peak = sp
+            st.peakI = st.seq.length - 1
+          }
+          r.angle = -st.theta
+          let hitI = -1
+          let f = 1
+          if (prevTheta < 0 && st.theta >= 0 && st.peak > (c.minHit ?? 250)) {
+            hitI = st.seq.length - 1
+            f = clampN(-prevTheta / (st.theta - prevTheta || 1), 0, 1)
+          } else if (st.peak > (c.minHit ?? 250) && sp < st.peak * 0.35) {
+            hitI = st.peakI // the swing ended without coming back: the gyro topped out, or it was cut short
+          } else if (s.t - st.tTop > (c.downMs ?? 1500)) {
+            reset('address')
+            return null
+          }
+          if (hitI < 0) return null
+          st.phase = r.phase = 'done'
+          const hit = st.seq[hitI]
+          const qImp = qlerp(hit.qPrev, hit.q, f)
+          const tImp = hit.t - hit.dt * 1000 * (1 - f)
+          const u = st.up
+          // The club's frame at address: shaft down the swing plane, the head travelling along t.
+          const shaft = norm(flat(scale(u, -1), dax))
+          const t = norm(cross(dax, shaft))
+          // The target line: the screen's left-right edge at address, levelled, pointing the way
+          // the club travels. Phone held with that edge upright: fall back to the swing itself.
+          let ref = flat([1, 0, 0], u)
+          ref = len(ref) < 0.3 ? norm(flat(t, u)) : norm(ref)
+          if (dot(ref, t) < 0) ref = scale(ref, -1)
+          const right = norm(cross(ref, u))
+          const yaw = (v) => {
+            const h = flat(v, u)
+            return Math.atan2(dot(h, right), dot(h, ref)) * D
+          }
+          const face = yaw(qrot(qImp, ref)) // where the face (square to ref at address) points now
+          const path = yaw(t)
+          // Which side of the ball: the screen faces the golfer's eyes, which are over the ball,
+          // so levelled it points from the hands out toward the ball: right of the line for a
+          // right-hander, left for a left-hander.
+          const hand = dot(flat([0, 0, 1], u), right) >= 0 ? 'R' : 'L'
+          const speed = Math.max(dot(hit.wa, dax), 0)
+          const down = Math.max(1, tImp - st.tTop)
+          return {
+            speed: Math.round(speed),
+            peak: Math.round(st.peak),
+            face: Math.round(face * 10) / 10,
+            path: Math.round(path * 10) / 10,
+            back: Math.round(st.backMax),
+            tempo: Math.round(((st.tTop - st.t0) / down) * 10) / 10,
+            hand,
+            ms: Math.round(tImp)
+          }
+        }
+        const clampN = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
+        return r
+      }
+      // ==== end swing reader =====================================================================
+
+      // ==== the club ===============================================================================
+      const swingCfg = () => controller.public.swing ?? {}
+      const reader = createSwingReader(swingCfg)
+      let held = false
+      let aimDir = 0
+      let shotSent = false
+      let lastRead = ''
+      const setBtn = $('set')
+
+      const pm = createPhoneMotion({
+        cfg: () => ({ thr: 999 }), // no generic swing events: the swing reader does it
+        onSwing: () => {},
+        onChange: () => (render(), send()),
+        onSample: (s) => {
+          // The phone's own axes: they don't jump if the screen rotates in the middle of a swing.
+          const shot = reader.push({ ...s, w: s.wd, up: s.ud })
+          if (shot) hit(shot)
+          send()
+        }
+      })
+
+      function send() {
+        const st = pm.state.startsWith('touch') ? 'touch' : pm.state
+        controller.input({
+          st,
+          ...(st === 'touch' ? { why: pm.state.slice(6) } : {}),
+          a: held,
+          sw: held ? Math.round(reader.angle) : 0,
+          bk: held ? Math.round(reader.back) : 0,
+          swp: held ? reader.phase : 'idle',
+          ax: aimDir,
+          still: st !== 'on' || pm.still,
+          ph: { hz: pm.hz, o: pm.angle, bias: pm.bias }
+        })
+      }
+
+      function hit(shot) {
+        shotSent = true
+        controller.send({ shot })
+        controller.vibrate(45)
+        setBtn.classList.add('hit')
+        setBtn.firstChild.textContent = 'HIT!'
+        const face = Math.abs(shot.face) < 1.5 ? 'square face' : `face ${Math.round(Math.abs(shot.face))}° ${shot.face > 0 ? 'right' : 'left'}`
+        const pub = controller.public
+        lastRead = `${(pub.putting ?? (pub.mode === 'putting' || pub.mode === 'putts')) ? 'Stroke' : 'Club'} ${shot.speed}°/s · ${face}`
+        $('readout').textContent = lastRead
+      }
+
+      setBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault()
+        if (!myTurn() || held) return
+        setBtn.setPointerCapture(e.pointerId) // thumbs slide during a swing: let go anywhere
+        held = true
+        shotSent = false
+        reader.arm()
+        setBtn.classList.add('down')
+        setBtn.firstChild.textContent = 'SWING!'
+        controller.vibrate(15)
+        send()
+      })
+      const letGo = () => {
+        if (!held) return
+        held = false
+        reader.disarm()
+        setBtn.classList.remove('down', 'hit')
+        setBtn.firstChild.textContent = 'SET'
+        if (!shotSent) $('readout').textContent = 'No swing read. Keep holding SET until you hit through the ball.'
+        send()
+      }
+      setBtn.addEventListener('pointerup', letGo)
+      setBtn.addEventListener('pointercancel', letGo)
+
+      for (const b of document.querySelectorAll('[data-aim]')) {
+        const set = (v) => (e) => {
+          e.preventDefault()
+          aimDir = v
+          send()
+        }
+        b.addEventListener('pointerdown', set(Number(b.dataset.aim)))
+        for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, set(0))
+      }
+
+      // No sensors: pull down, flick up. Power from the flick's speed, face from its angle.
+      const pad = $('pad')
+      let drag = null
+      pad.addEventListener('pointerdown', (e) => {
+        if (!myTurn()) return
+        pad.setPointerCapture(e.pointerId)
+        drag = [{ x: e.clientX, y: e.clientY, t: performance.now() }]
+      })
+      pad.addEventListener('pointermove', (e) => drag && drag.push({ x: e.clientX, y: e.clientY, t: performance.now() }))
+      pad.addEventListener('pointerup', (e) => {
+        if (!drag) return
+        const pts = drag
+        drag = null
+        const r = pad.getBoundingClientRect()
+        const low = pts.reduce((a, p) => (p.y > a.y ? p : a), pts[0])
+        const z = { x: e.clientX, y: e.clientY, t: performance.now() }
+        if (low.y - z.y < r.height * 0.3) return
+        let k = pts.length - 1
+        while (k > 0 && z.t - pts[k].t < 100) k--
+        const v = (pts[k].y - z.y) / r.height / Math.max(0.016, (z.t - pts[k].t) / 1000)
+        const face = (Math.atan2(z.x - low.x, low.y - z.y) * 180) / Math.PI
+        controller.send({ flick: { power: round(clamp(v / 5, 0, 1.1), 100), face: round(face) } })
+        controller.vibrate(40)
+      })
+
+      // The safety card: shown once per party, before your first swing. SET stays covered until
+      // you tap I'm ready; the TV waits for everyone (or starts anyway after a moment).
+      let readTapped = false
+      $('ready').onclick = () => {
+        readTapped = true
+        controller.send({ safe: true })
+        controller.vibrate(20)
+        render()
+      }
+      $('pause').onclick = () => controller.send(controller.public.paused ? { resume: true } : { pause: true })
+      // The Wardrobe: a hat, a top and one extra, from the TV's list (public.wardrobe). Each tap
+      // goes straight to the TV ({ outfit: { slot: id } }), which dresses your bean on screen and
+      // remembers it for next time; your current pick is highlighted from mine.outfit. Below it,
+      // which way you swing ({ hand: 'R' | 'L' }, highlighted from mine.hand): the bean turns
+      // round and the TV uses your pick instead of guessing it from how you hold the phone.
+      let wardrobeOpen = false
+      let wasMine = false
+      let wardrobeKey = ''
+      const ICONS = { none: '✕', bucket: '👒', shark: '🦈', polo: '👕', hawaiian: '🌺', lei: '🌸', snorkel: '🤿' }
+      const SLOTS = { hat: 'Hat', top: 'Top', acc: 'Extra' }
+      $('dress').onclick = () => {
+        wardrobeOpen = true
+        controller.vibrate(10)
+        render()
+      }
+      $('wardrobe-done').onclick = () => {
+        wardrobeOpen = false
+        render()
+      }
+      function renderWardrobe() {
+        const list = controller.public.wardrobe
+        const worn = controller.mine.outfit
+        const show = wardrobeOpen && Boolean(list && worn) && !held
+        $('wardrobe').hidden = !show
+        if (!show) return
+        const hand = controller.mine.hand ?? 'R'
+        const key = JSON.stringify([list, worn, hand])
+        if (key === wardrobeKey) return
+        wardrobeKey = key
+        $('wardrobe-slots').replaceChildren(
+          ...Object.entries(SLOTS).flatMap(([slot, title]) => {
+            const h = document.createElement('h2')
+            h.textContent = title
+            const row = document.createElement('div')
+            row.className = 'opts'
+            for (const item of list[slot] ?? []) {
+              const b = document.createElement('button')
+              b.className = worn[slot] === item.id ? 'on' : ''
+              b.dataset.slot = slot
+              b.dataset.id = item.id
+              b.setAttribute('aria-pressed', String(worn[slot] === item.id))
+              const icon = document.createElement('span')
+              icon.textContent = ICONS[item.id] ?? '•'
+              icon.setAttribute('aria-hidden', 'true')
+              b.append(icon, item.label)
+              b.onclick = () => {
+                controller.send({ outfit: { [slot]: item.id } })
+                controller.vibrate(12)
+              }
+              row.append(b)
+            }
+            return [h, row]
+          }),
+          ...swingRow(hand)
+        )
+      }
+      function swingRow(hand) {
+        const h = document.createElement('h2')
+        h.textContent = 'Swing'
+        const row = document.createElement('div')
+        row.className = 'opts two'
+        for (const [id, label, icon] of [['R', 'Right-handed', 'R'], ['L', 'Left-handed', 'L']]) {
+          const b = document.createElement('button')
+          b.className = hand === id ? 'on' : ''
+          b.dataset.hand = id
+          b.setAttribute('aria-pressed', String(hand === id))
+          const mark = document.createElement('span')
+          mark.textContent = icon
+          mark.setAttribute('aria-hidden', 'true')
+          b.append(mark, label)
+          b.onclick = () => {
+            controller.send({ hand: id })
+            controller.vibrate(12)
+          }
+          row.append(b)
+        }
+        return [h, row]
+      }
+      $('again').onclick = () => controller.send({ again: true })
+
+      // The TV's menus (pause, settings, results), as buttons: any phone can work them, so nobody
+      // has to touch the TV. Taps go back as { menu: { id } }, { menu: { id, step } } or { menu: { back } }.
+      let menuKey = ''
+      function renderMenu(menu) {
+        $('menu').hidden = !menu
+        const key = JSON.stringify(menu ?? null)
+        if (!menu || key === menuKey) return
+        menuKey = key
+        $('menu-title').textContent = menu.title
+        const tap = (msg) => () => (controller.send({ menu: msg }), controller.vibrate(10))
+        $('menu-items').replaceChildren(
+          ...menu.items.map((it) => {
+            if (it.sub) {
+              // A card: what it is, in a line, with an icon (the game picker).
+              const b = document.createElement('button')
+              b.className = 'card' + (it.id === menu.sel ? ' sel' : '')
+              const icon = document.createElement('span')
+              icon.className = 'icon'
+              icon.textContent = it.icon ?? ''
+              icon.setAttribute('aria-hidden', 'true')
+              const words = document.createElement('span')
+              const name = document.createElement('b')
+              name.textContent = it.label
+              const line = document.createElement('small')
+              line.textContent = it.sub
+              words.append(name, line)
+              b.append(icon, words)
+              b.onclick = tap({ id: it.id })
+              return b
+            }
+            if (it.value === null) {
+              const b = document.createElement('button')
+              b.textContent = it.label
+              b.className = it.id === menu.sel ? 'sel' : ''
+              b.onclick = tap({ id: it.id })
+              return b
+            }
+            const row = document.createElement('div')
+            row.className = 'value' + (it.id === menu.sel ? ' sel' : '')
+            const label = document.createElement('span')
+            label.textContent = it.label
+            const less = document.createElement('button')
+            less.textContent = '‹'
+            less.setAttribute('aria-label', `${it.label}: less`)
+            less.onclick = tap({ id: it.id, step: -1 })
+            const value = document.createElement('em')
+            value.textContent = it.value
+            const more = document.createElement('button')
+            more.textContent = '›'
+            more.setAttribute('aria-label', `${it.label}: more`)
+            more.onclick = tap({ id: it.id, step: 1 })
+            row.append(label, less, value, more)
+            return row
+          })
+        )
+      }
+      controller.on('msg', (d) => {
+        if (d?.ping) controller.send({ pong: d.ping, pt: round(performance.now()) }) // the TV's clock check
+        if (d?.buzz) controller.vibrate(d.buzz)
+      })
+
+      const myTurn = () => Boolean(controller.mine.active) && controller.public.phase === 'aim' && !controller.public.paused && (controller.mine.safe || readTapped)
+      const STATES = {
+        on: ['Motion on', 'on'],
+        ask: ['Tap "Allow motion" below', 'warn'],
+        waiting: ['Starting sensors…', 'warn'],
+        stalled: ['Motion paused: tap the screen', 'warn'],
+        'touch:unsupported': ['No sensors: touch pad', 'bad'],
+        'touch:denied': ['Motion blocked: touch pad', 'bad'],
+        'touch:insecure': ['Motion needs https: touch pad', 'bad']
+      }
+      const stalled = () => pm.state === 'on' && performance.now() - pm.last > 500
+      let clubsKey = ''
+      let scoresKey = ''
+      function render() {
+        const { public: pub, mine, me } = controller
+        // You play as one of the Shape crew: their colour, and their name beside yours.
+        const golfer = mine.golfer
+        document.body.style.setProperty('--me', golfer?.color ?? me.color)
+        $('name').textContent = golfer && golfer.name !== me.name ? `${me.name || 'Phone'} · ${golfer.name}` : me.name || 'Phone'
+        const [label, cls] = STATES[stalled() ? 'stalled' : pm.state] ?? [pm.state, '']
+        $('state').textContent = label
+        $('state').className = `chip ${cls}`
+        $('main').className = pm.state === 'ask' ? 'ask' : ''
+        const touch = pm.state.startsWith('touch')
+        const mineNow = myTurn()
+        const over = pub.phase === 'over'
+        const inGame = pub.phase && pub.phase !== 'menu' && pub.phase !== 'over'
+        $('safety').hidden = !(inGame && !mine.safe && !readTapped)
+        if (!mineNow && held) letGo()
+        if (mineNow && !wasMine) wardrobeOpen = false // your shot: back to the club
+        wasMine = mineNow
+        $('title').textContent = pub.paused ? 'Paused' : over ? 'Challenge over' : pub.banner ? pub.banner : mineNow ? (mine.golfer ? `Your shot, ${mine.golfer.name}!` : 'Your shot!') : pub.turnName ? `${pub.turnName} is up` : 'Seaside Swing'
+        // Putting: the putting modes, or a ball on the course's green (the TV says which).
+        const putting = pub.putting ?? (pub.mode === 'putting' || pub.mode === 'putts')
+        $('hint').textContent = over
+          ? 'Final scores are on the TV.'
+          : mineNow && putting
+            ? `${mine.putt ? mine.putt + '. ' : ''}${touch ? 'Aim, then pull down on the pad and flick up: a longer flick rolls further.' : mine.puttMark ? 'Hold SET, take it back to the white mark on the bar, then stroke through. The aim already allows for the slope.' : 'Grip it like a putter, screen up at you, top toward the ball. Hold SET: the further back, the further it rolls. Then stroke through.'}`
+            : mineNow
+            ? touch
+              ? 'Pick a club and aim, then pull down on the pad and flick up.'
+              : 'Grip it like a club: screen up at you, top toward the ball. Hold SET, take it back to fill the bar, then swing through.'
+            : pub.ballsLeft
+              ? pub.ballsLeft
+              : 'Look at the TV.'
+        $('stage').hidden = !mineNow
+        $('scores').hidden = mineNow // your shot: the club gets the room
+        setBtn.hidden = touch
+        $('meter').hidden = touch
+        pad.hidden = !touch
+        renderMenu(pub.menu ?? null)
+        renderWardrobe()
+        $('dress').hidden = !mine.outfit
+        $('again').hidden = !over || Boolean(pub.menu)
+        $('playrow').hidden = over || !pub.phase || pub.phase === 'menu' || Boolean(pub.menu)
+        $('pause').textContent = pub.paused ? 'Resume' : 'Pause'
+        // Putting with the help: a mark on the bar for how far back to take it.
+        $('mark').hidden = !(putting && mine.puttMark)
+        if (mine.puttMark) $('mark').style.left = `${Math.min(1, mine.puttMark) * 100}%`
+        $('aim').textContent = !mine.aim ? (putting ? 'Aim at the cup' : 'Aim straight') : `Aim ${Math.abs(mine.aim)}° ${mine.aim > 0 ? 'right' : 'left'}`
+        if (mine.last && mine.last !== lastRead) $('readout').textContent = lastRead = mine.last
+        const ck = JSON.stringify([pub.clubs, mine.club])
+        if (ck !== clubsKey) {
+          clubsKey = ck
+          $('clubs').replaceChildren(
+            ...(pub.clubs ?? []).map((c, i) => {
+              const b = document.createElement('button')
+              b.className = i === mine.club ? 'on' : ''
+              b.append(c.short)
+              const sm = document.createElement('small')
+              sm.textContent = c.sub ?? `${c.carry} yd`
+              b.append(sm)
+              b.onclick = () => {
+                if (!held) controller.send({ club: i })
+                controller.vibrate(10)
+              }
+              return b
+            })
+          )
+        }
+        const key = JSON.stringify([pub.cards, pub.turn])
+        if (key !== scoresKey) {
+          scoresKey = key
+          $('scores').replaceChildren(
+            ...(pub.cards ?? []).map((c) => {
+              const d = document.createElement('div')
+              d.className = 'score' + (c.id === pub.turn ? ' turn' : '')
+              const dotEl = document.createElement('span')
+              dotEl.className = 'dot'
+              dotEl.style.background = c.color
+              const total = document.createElement('b')
+              total.textContent = c.score
+              d.append(dotEl, c.name, total)
+              return d
+            })
+          )
+        }
+      }
+      let wasStalled = false
+      let fillOk = false
+      function frame() {
+        requestAnimationFrame(frame)
+        if (stalled() !== wasStalled) ((wasStalled = !wasStalled), render())
+        // The meter is the power: your backswing fills it (full at backFull), and it holds while you
+        // come down. Gold while you take it back, pink past full (an overswing: wilder), lime once
+        // the downswing is fast enough to deliver all of it.
+        const cfg = swingCfg()
+        const backFull = cfg.backFull ?? 200
+        const down = reader.phase === 'down' || reader.phase === 'done'
+        const want = !held ? 0 : clamp((down ? reader.back : reader.angle) / backFull, 0, cfg.maxBack ?? 1.2)
+        const committed = down && Math.abs(reader.speed ?? 0) >= want * (cfg.full ?? 1000) * (cfg.commit ?? 0.5)
+        if (committed) fillOk = true
+        if (!held || !down) fillOk = false
+        $('fill').style.width = `${Math.min(1, want) * 100}%`
+        // Putting: how far this backstroke rolls (on the flat), live, against the cup's distance.
+        const range = controller.mine?.puttRange
+        const ft = Math.round(Math.min(want, cfg.maxBack ?? 1.2) * range)
+        $('feet').hidden = !(range && held)
+        if (range && held) $('feet').textContent = `${ft} ft`
+        $('fill').style.background = fillOk ? '#b6f04a' : want > 1 ? '#ff5c8a' : '#ffd23f'
+      }
+      controller.on('update', render)
+      render()
+      frame()
+      send()
+    </script>
+  </body>
+</html>

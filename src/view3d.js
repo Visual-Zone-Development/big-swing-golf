@@ -167,7 +167,13 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
   const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 2.3, 8, 6).translate(0, 1.15, 0), new THREE.MeshLambertMaterial({ color: '#fff8ec' }))
   const pin = new THREE.Mesh(new THREE.ShapeGeometry(pennant(), 4), new THREE.MeshLambertMaterial({ color: '#ff5c8a', side: THREE.DoubleSide }))
   pin.position.y = 2.25
-  cup.add(hole, liner, stick, pin)
+  // The hole and its liner lie on the green's slope (the stick stays upright): laid flat, the
+  // uphill half of the hole sank into a sloping green.
+  const lip = new THREE.Group()
+  lip.add(hole, liner)
+  const UP = new THREE.Vector3(0, 1, 0)
+  const slope = new THREE.Vector3()
+  cup.add(lip, stick, pin)
   cup.visible = false
   scene.add(cup)
   const others = new THREE.InstancedMesh(new THREE.SphereGeometry(TUNING.ball.radius, 14, 10), new THREE.MeshStandardMaterial({ roughness: 0.3 }), 4)
@@ -263,7 +269,11 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
     puttAim.visible = Boolean(P) && o.mode === 'putt'
     others.count = 0
     if (flag) {
-      cup.position.set(flag.x, ph(flag.x, flag.z) + 0.004, -flag.z)
+      cup.position.set(flag.x, ph(flag.x, flag.z) + 0.006, -flag.z)
+      // The ground's normal at the cup (the view's z is the game's −z).
+      const e = 0.12
+      slope.set(-(ph(flag.x + e, flag.z) - ph(flag.x - e, flag.z)) / (2 * e), 1, (ph(flag.x, flag.z + e) - ph(flag.x, flag.z - e)) / (2 * e)).normalize()
+      lip.quaternion.setFromUnitVectors(UP, slope)
       pin.rotation.y = Math.sin(clock * 1.8) * 0.25
       // From far down the fairway the flag is drawn bigger, so it can be seen on a TV.
       const far = Math.hypot(cam.pos.x - flag.x, cam.pos.z + flag.z)

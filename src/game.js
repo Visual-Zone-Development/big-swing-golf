@@ -131,7 +131,7 @@ const state = {
   safe: new Set(), // phones that have read the safety card this party
   safetyTime: 0
 }
-window.__game = { state, TUNING, party, settings, view, get titleMenu() { return titleMenu }, get wardrobeMenu() { return wardrobeMenu }, get pickMenu() { return pickMenu }, get pauseMenu() { return pauseMenu }, get pauseButton() { return PAUSE_BUTTON }, get settingsMenu() { return settingsScreen.menu }, get overflow() { return overflow }, get hud() { return hud } }
+window.__game = { state, TUNING, party, settings, view, get titleMenu() { return titleMenu }, get wardrobeMenu() { return wardrobeMenu }, get pickMenu() { return pickMenu }, get pauseMenu() { return pauseMenu }, get overMenu() { return overMenu }, get pauseButton() { return PAUSE_BUTTON }, get settingsMenu() { return settingsScreen.menu }, get overflow() { return overflow }, get hud() { return hud } }
 const debug = new URLSearchParams(location.search).has('debug')
 
 const MODES = [
@@ -206,7 +206,7 @@ const overMenu = createMenu(
     { id: 'pick', label: 'Choose a game' },
     { id: 'title', label: 'Quit to title' }
   ],
-  { y: 560, accent: GOLD }
+  { y: 560, width: 420, height: 60, gap: 12, accent: GOLD }
 )
 const settingsScreen = createSettingsScreen({
   settings,
@@ -2403,59 +2403,109 @@ function drawHoleMap(s) {
   text(`${HOLE.name}`, x + w / 2, y + 6, fitFont(rubik, 16, w - 10, HOLE.name), QUIET)
 }
 
+/** Where the results card, its rows and its buttons sit for n players: one card, centred. */
+function resultsLayout(n) {
+  const rowsH = n * 78 - 10
+  const menuH = overMenu.items.length * 72 - 12
+  const h = 122 + rowsH + 28 + menuH + 30
+  const top = Math.round((MIN_H - h) / 2) + DY
+  return { top, h, rows: top + 122, menu: top + 122 + rowsH + 28 }
+}
+
+/** A rounded label: dark words on a bright pill. Returns its width. Drawn leftward from x with align 'right'. */
+function pill(str, x, cy, font, fill, align = 'left') {
+  ctx.font = font
+  const w = Math.ceil(ctx.measureText(str).width) + 24
+  const left = align === 'right' ? x - w : x
+  panel(left, cy - 15, w, 30, 15, fill)
+  plain(str, left + w / 2, cy + 1, font, '#0b1a36')
+  return w
+}
+
+/** The results: a navy scorecard in the clubhouse rail's style, with the rail's tiles as its buttons. */
 function drawResults() {
-  veil(0.6)
-  ctx.save()
-  ctx.translate(0, DY)
+  veil(0.55)
+  // One row per player, whatever was played.
+  let kicker = 'Final scores'
+  let title
+  let rows
+  const seat = (r) => state.seats.find((x) => x.id === r.id)
   if (isCourse()) {
-    text(`${HOLE.name} · par ${HOLE.par}`, W / 2, 90, fitFont(lilita, 64 * ts(), W - 120, `${HOLE.name} · par ${HOLE.par}`), GOLD)
-    courseStandings(state.seats).forEach((r, i) => {
-      const s = state.seats.find((x) => x.id === r.id)
-      const y = 170 + i * 80
-      panel(W / 2 - 330, y, 660, 66, 16, i === 0 ? 'rgba(11,26,54,0.92)' : PANEL)
-      text(`${i + 1}`, W / 2 - 290, y + 34, head(40), i === 0 ? GOLD : INK)
-      dot(W / 2 - 240, y + 33, 12, s.color)
-      text(s.name, W / 2 - 215, y + 34, body(28), INK, 'left')
-      text(s.done ? scoreName(s.strokes) : 'Still out', W / 2 + 160, y + 34, body(22, 600), s.strokes <= HOLE.par ? LIME : QUIET, 'right')
-      text(`${r.total}`, W / 2 + 300, y + 34, head(40), i === 0 ? GOLD : INK, 'right')
-      if (s.newBest) text('New best!', W / 2 + 300, y + 76, body(18), TEAL, 'right')
+    kicker = `Round over · par ${HOLE.par}`
+    title = HOLE.name
+    rows = courseStandings(state.seats).map((r) => {
+      const s = seat(r)
+      return { s, total: r.total, detail: s.done ? scoreName(s.strokes) : 'Still out', good: s.done && s.strokes <= HOLE.par }
     })
-    ctx.restore()
-    overMenu.draw(ctx, fitFont(rubik, 28 * ts(), 380, ...overMenu.items.map((it) => it.label)))
-    return
-  }
-  text(isPutts() ? 'Putting challenge' : 'Target challenge', W / 2, 90, head(64), GOLD)
-  if (isPutts()) {
-    puttStandings(state.seats).forEach((r, i) => {
-      const s = state.seats.find((x) => x.id === r.id)
-      const y = 170 + i * 80
-      panel(W / 2 - 330, y, 660, 66, 16, i === 0 ? 'rgba(11,26,54,0.92)' : PANEL)
-      text(`${i + 1}`, W / 2 - 290, y + 34, head(40), i === 0 ? GOLD : INK)
-      dot(W / 2 - 240, y + 33, 12, s.color)
-      text(s.name, W / 2 - 215, y + 34, body(28), INK, 'left')
+  } else if (isPutts()) {
+    title = 'Putting challenge'
+    rows = puttStandings(state.seats).map((r) => {
+      const s = seat(r)
       const ones = s.card.filter((x) => x === 1).length
-      text(`${ones} one-putt${ones === 1 ? '' : 's'}`, W / 2 + 120, y + 34, body(20, 500), QUIET, 'right')
-      text(`${r.total}`, W / 2 + 300, y + 34, head(40), i === 0 ? GOLD : INK, 'right')
-      if (s.newBest) text('New best!', W / 2 + 300, y + 76, body(18), TEAL, 'right')
+      return { s, total: r.total, detail: `${ones} one-putt${ones === 1 ? '' : 's'}` }
     })
-    ctx.restore()
-    overMenu.draw(ctx, fitFont(rubik, 28 * ts(), 380, ...overMenu.items.map((it) => it.label)))
-    return
+  } else {
+    title = 'Target challenge'
+    rows = standings(state.seats).map((r) => {
+      const s = seat(r)
+      return { s, total: r.total, detail: `${s.shots.filter((x) => x.points).length}/${s.shots.length} on target` }
+    })
   }
-  standings(state.seats).forEach((r, i) => {
-    const s = state.seats.find((x) => x.id === r.id)
-    const y = 170 + i * 80
-    panel(W / 2 - 330, y, 660, 66, 16, i === 0 ? 'rgba(11,26,54,0.92)' : PANEL)
-    text(`${i + 1}`, W / 2 - 290, y + 34, head(40), i === 0 ? GOLD : INK)
-    dot(W / 2 - 240, y + 33, 12, s.color)
-    text(s.name, W / 2 - 215, y + 34, body(28), INK, 'left')
-    const hits = s.shots.filter((x) => x.points).length
-    text(`${hits}/${s.shots.length} on target`, W / 2 + 120, y + 34, body(20, 500), QUIET, 'right')
-    text(`${r.total}`, W / 2 + 300, y + 34, head(40), i === 0 ? GOLD : INK, 'right')
-    if (s.newBest) text('New best!', W / 2 + 300, y + 76, body(18), TEAL, 'right')
-  })
+  const L = resultsLayout(rows.length)
+  overMenu.place({ x: W / 2, y: L.menu })
+  const cw = 760
+  const x = W / 2 - 340
+  panel(W / 2 - cw / 2, L.top, cw, L.h, RAIL.radius, 'rgba(11,26,54,0.95)')
+  ctx.save()
+  ctx.letterSpacing = '3px'
+  plain(kicker.toUpperCase(), W / 2, L.top + 36, fitFont(rubik, 15 * Math.min(ts(), 1.2), cw - 80, kicker.toUpperCase()), QUIET)
   ctx.restore()
-  overMenu.draw(ctx, fitFont(rubik, 28 * ts(), 380, ...overMenu.items.map((it) => it.label)))
+  plain(title, W / 2, L.top + 80, fitFont(lilita, 50 * Math.min(ts(), 1.2), cw - 80, title), GOLD)
+  const rs = Math.min(ts(), 1.2)
+  rows.forEach((r, i) => {
+    const y = L.rows + i * 78
+    const cy = y + 35
+    const first = i === 0 && rows.length > 1
+    panel(x, y, 680, 68, 20, '#16305a')
+    if (first) {
+      ctx.strokeStyle = GOLD
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.roundRect(x + 1.5, y + 1.5, 677, 65, 19)
+      ctx.stroke()
+    }
+    plain(`${i + 1}`, x + 38, cy + 1, lilita(34), i === 0 ? GOLD : QUIET)
+    dot(x + 84, cy, 15, '#fff8ec')
+    dot(x + 84, cy, 12, r.s.color)
+    // From the right: the score, then what it was called; the name gets the room that's left.
+    plain(`${r.total}`, x + 652, cy + 2, lilita(42), i === 0 ? GOLD : INK, 'right')
+    ctx.font = lilita(42)
+    let right = x + 652 - Math.max(46, ctx.measureText(`${r.total}`).width) - 18
+    const detailFont = rubik(17 * rs)
+    if (r.good) right -= pill(r.detail, right, cy, detailFont, LIME, 'right') + 12
+    else {
+      plain(r.detail, right, cy + 1, detailFont, QUIET, 'right')
+      ctx.font = detailFont
+      right -= ctx.measureText(r.detail).width + 14
+    }
+    const bestFont = rubik(14 * rs)
+    ctx.font = bestFont
+    const bestW = r.s.newBest ? ctx.measureText('New best!').width + 24 + 12 : 0
+    const nameFont = fitFont(rubik, 26 * rs, right - (x + 110) - bestW, r.s.name)
+    plain(r.s.name, x + 110, cy + 1, nameFont, INK, 'left')
+    if (r.s.newBest) {
+      ctx.font = nameFont
+      pill('New best!', x + 110 + ctx.measureText(r.s.name).width + 12, cy, bestFont, TEAL)
+    }
+  })
+  // The buttons: menu.js handles the input; these are the rail's tiles, gold when selected.
+  overMenu.items.forEach((it, i) => {
+    const r = overMenu.rect(i)
+    const on = it === overMenu.selected
+    if (on) panel(r.x, r.y + 6, r.w, r.h, 20, '#c99a12')
+    panel(r.x, r.y, r.w, r.h, 20, on ? GOLD : '#16305a')
+    plain(it.label, r.x + r.w / 2, r.y + r.h / 2 + 1, fitFont(rubik, 23 * rs, r.w - 40, it.label), on ? '#0b1a36' : INK)
+  })
 }
 
 function drawDebug() {

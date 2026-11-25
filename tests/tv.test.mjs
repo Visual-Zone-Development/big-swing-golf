@@ -265,6 +265,18 @@ test('the Target challenge gives each player ten balls, then ranks them', async 
   assert.equal(await t.state(() => window.__game.party.public.phase), 'over')
   await t.page.waitForFunction(() => window.__game.party.public.menu?.title === 'Challenge over')
   assert.deepEqual((await t.state(() => window.__game.party.public.menu)).items.map((i) => i.id), ['again', 'pick', 'title'])
+  // The scorecard: one card in the middle of the screen, its buttons under the player's row.
+  await t.page.waitForTimeout(100)
+  const tiles = await t.state(() => window.__game.overMenu.items.map((_, i) => window.__game.overMenu.rect(i)))
+  const cardTop = tiles[0].y - 28 - 68 - 122 // the gap, one player's row, the heading
+  const cardBottom = tiles.at(-1).y + tiles.at(-1).h + 30
+  assert.ok(cardTop > 0 && cardBottom < 800, `the card fits the screen: ${cardTop} to ${cardBottom}`)
+  assert.ok(Math.abs((cardTop + cardBottom) / 2 - 400) <= 1, `the card is centred: ${cardTop} to ${cardBottom}`)
+  // A click on its second tile opens the game picker; Back returns to the results.
+  await t.page.mouse.click(tiles[1].x + tiles[1].w / 2, tiles[1].y + tiles[1].h / 2)
+  await t.page.waitForFunction(() => window.__game.state.screen !== 'gameover')
+  await key(t.page, 'Backspace')
+  await t.page.waitForFunction(() => window.__game.state.screen === 'gameover')
   t.say('p1', { menu: { id: 'again' } })
   await t.page.waitForFunction(() => window.__game.state.screen === 'playing' && window.__game.state.seats[0].shots.length === 0)
   await t.page.close()

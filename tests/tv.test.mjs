@@ -45,8 +45,10 @@ after(async () => {
 })
 
 /** The TV, with a relay the test controls: tv.phone(id, name) joins, tv.say(id, data) sends a message from it. */
-async function tv({ query = '' } = {}) {
+async function tv({ query = '', launcher = false } = {}) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+  // Inside the PushPlay launcher: window.pushplay.quit() goes back to the library (counted here).
+  if (launcher) await page.addInitScript(() => (window.pushplay = { quit: () => (window.__quits = (window.__quits ?? 0) + 1) }))
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message))
   let socket
@@ -471,9 +473,76 @@ test('the title rail has a Wardrobe: playing on this screen, the bean wears what
   await t.page.close()
 })
 
+test('the sculpted golfer holds the grip with bent elbows, not arms stretched straight out', async () => {
+  const t = await tv({ query: '?models' })
+  await t.page.waitForFunction(() => window.__game.view.modelBeans, null, { timeout: 60000 })
+  await startParty(t, [['p1', 'Ada']])
+  await t.page.waitForFunction(() => window.__game.view.armsOf(window.__game.state.seats[0].look.id)?.[0])
+  const arms = await t.state(() => window.__game.view.armsOf(window.__game.state.seats[0].look.id))
+  for (const arm of arms) {
+    assert.ok(arm.elbow >= 15 && arm.elbow <= 120, `elbow bent ${arm.elbow}° (${JSON.stringify(arms)})`)
+    assert.ok(arm.grow <= 2.2, `arms grown ${arm.grow}×`)
+  }
+  assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
+test('the golfer holds the club that is picked: the driver, then a wedge from the phone', async () => {
+  const t = await tv()
+  await startParty(t, [['p1', 'Ada']])
+  const held = () => t.state(() => window.__game.view.clubOf(window.__game.state.seats[0].look.id))
+  await t.page.waitForFunction(() => window.__game.view.clubOf(window.__game.state.seats[0].look.id) === 'dr')
+  t.say('p1', { club: 6 }) // the sand wedge
+  await t.page.waitForFunction(() => window.__game.view.clubOf(window.__game.state.seats[0].look.id) === 'sw')
+  assert.equal(await held(), 'sw')
+  assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
+test('inside the launcher the title rail ends with Quit to library, and choosing it goes back to the games', async () => {
+  const t = await tv({ launcher: true })
+  assert.deepEqual(await t.state(() => window.__game.titleMenu.items.map((i) => i.id)), ['party', 'solo', 'wardrobe', 'settings', 'quit-to-library'])
+  // The rail keeps its first tile under the logo, and the last one clear of the prompts.
+  const [first, last] = await t.state(() => [window.__game.titleMenu.rect(0), window.__game.titleMenu.rect(4)])
+  assert.ok(first.y >= 230, `first tile at ${first.y}`)
+  assert.ok(last.y + last.h <= 740, `last tile ends at ${last.y + last.h}`)
+  for (let i = 0; i < 4; i++) await key(t.page, 'ArrowDown')
+  await key(t.page, 'Enter')
+  assert.equal(await t.state(() => window.__quits), 1)
+  assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
+test('paused, the menu is the clubhouse rail down the left (Quit to library in the launcher), and the course goes soft behind it', async () => {
+  const t = await tv({ launcher: true })
+  await soloGame(t)
+  await key(t.page, 'Escape')
+  await t.page.waitForFunction(() => window.__game.state.screen === 'paused')
+  await frames(t.page)
+  const ids = await t.state(() => window.__game.pauseMenu.items.map((i) => i.id))
+  assert.deepEqual(ids, ['resume', 'restart', 'pick', 'settings', 'title', 'quit-to-library'])
+  const rects = await t.state(() => window.__game.pauseMenu.items.map((_, i) => window.__game.pauseMenu.rect(i)))
+  for (const r of rects) assert.ok(r.x >= 0 && r.x + r.w <= 400, `tile inside the rail: ${r.x}..${r.x + r.w}`)
+  assert.ok(rects.at(-1).y + rects.at(-1).h <= 740, 'clear of the prompts')
+  assert.equal(await t.state(() => window.__game.hud.pauseRail), true)
+  assert.match(await t.page.evaluate(() => document.getElementById('gl').style.filter), /blur/)
+  await key(t.page, 'Enter') // Resume
+  await t.page.waitForFunction(() => window.__game.state.screen === 'playing')
+  assert.equal(await t.page.evaluate(() => document.getElementById('gl').style.filter), '')
+  assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
+test('outside the launcher the title has no Quit tile: a browser tab can’t close itself', async () => {
+  const t = await tv()
+  assert.ok(!(await t.state(() => window.__game.titleMenu.items.some((i) => i.id === 'quit-to-library'))))
+  await t.page.close()
+})
+
 test('Graphics: Low is light mode, and High asks for full quality even on a machine with no GPU', async () => {
   const t = await tv()
-  assert.equal(await t.state(() => window.__game.view.light), true) // no GPU here: Auto picks light
+  assert.equal(await t.state(() => window.__game.settings.data.graphics), 'low') // no GPU here: Low by default
+  assert.equal(await t.state(() => window.__game.view.light), true)
   await t.page.evaluate(() => window.__game.view.setGraphics('high'))
   assert.equal(await t.state(() => window.__game.view.light), false)
   assert.equal(await t.state(() => window.__game.view.lighting.low), false)
@@ -481,6 +550,43 @@ test('Graphics: Low is light mode, and High asks for full quality even on a mach
   assert.equal(await t.state(() => window.__game.view.light), true)
   assert.equal(await t.state(() => window.__game.view.lighting.low), true)
   assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
+/** Make the browser's software renderer report a real GPU, so the game sees one. */
+const realGpu = () => {
+  for (const C of [WebGLRenderingContext, WebGL2RenderingContext]) {
+    const get = C.prototype.getParameter
+    C.prototype.getParameter = function (p) {
+      return p === 0x9246 || p === this.RENDERER ? 'ANGLE (NVIDIA GeForce RTX 3060)' : get.call(this, p)
+    }
+  }
+}
+
+test('on a machine with a GPU, Graphics starts on High, and a save that said Auto moves to High', async () => {
+  for (const saved of [null, 'auto']) {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+    await page.addInitScript(realGpu)
+    if (saved) await page.addInitScript((g) => localStorage.setItem('big-swing-golf-settings-v1', JSON.stringify({ graphics: g })), saved)
+    await page.goto(base)
+    await page.waitForFunction(() => window.__game?.state?.screen === 'title')
+    await page.evaluate(() => (window.__game.view.renderer.render = () => {}))
+    assert.equal(await page.evaluate(() => window.__game.settings.data.graphics), 'high', `saved: ${saved}`)
+    assert.equal(await page.evaluate(() => window.__game.view.light), false)
+    assert.deepEqual(await page.evaluate(() => window.__game.settingsMenu.items.find((i) => i.id === 'graphics').options.map((o) => o.value)), ['high', 'low'])
+    await page.close()
+  }
+})
+
+test('High draws at the screen\u2019s own sharpness (a 2× screen gets twice the pixels, a 4K TV is capped), Low at half', async () => {
+  const t = await tv()
+  await t.page.evaluate(() => window.__game.view.setGraphics('high'))
+  await t.page.evaluate(() => window.__game.view.setSharpness(2))
+  assert.equal(await t.state(() => window.__game.view.renderer.getPixelRatio()), 2)
+  await t.page.evaluate(() => window.__game.view.setSharpness(3)) // 4K: no more than 2560 pixels across
+  assert.equal(await t.state(() => window.__game.view.renderer.getPixelRatio()), 2560 / 1280)
+  await t.page.evaluate(() => window.__game.view.setGraphics('low'))
+  assert.equal(await t.state(() => window.__game.view.renderer.getPixelRatio()), 0.5)
   await t.page.close()
 })
 
@@ -859,20 +965,35 @@ test('on the putting green the club card is the putter and the flag tag is in fe
   await t.page.close()
 })
 
-test('the how-to sits in a pill clear of the club card, and with a mouse the club card moves up clear of the touch buttons', async () => {
+test('the shot panel sits bottom right with the how-to in a card just above it, and with a mouse it moves up clear of the touch buttons', async () => {
   const t = await tv()
   await soloGame(t)
   await frames(t.page)
   let hud = await t.state(() => window.__game.hud)
-  const H = await t.page.evaluate(() => innerHeight)
+  const [W, H] = await t.page.evaluate(() => [innerWidth, innerHeight])
   assert.ok(hud.hintPill, 'the how-to shows on the first turn')
-  assert.ok(hud.clubCard.x + hud.clubCard.w < 640 - hud.hintPill.w / 2, 'side by side, not on top of each other')
+  assert.ok(hud.clubCard.x > W / 2, 'the shot panel is on the right, clear of the golfer')
+  assert.ok(hud.hintPill.y + hud.hintPill.h <= hud.clubCard.y, 'the how-to is above the shot panel, not on it')
+  assert.equal(Math.round(hud.hintPill.x + hud.hintPill.w), Math.round(hud.clubCard.x + hud.clubCard.w), 'their right edges line up')
   assert.ok(hud.clubCard.y + hud.clubCard.h <= H - 20, 'on the bottom edge with keys')
   await t.page.mouse.move(640, 400)
   await t.page.mouse.move(660, 420)
   await frames(t.page, 3)
   hud = await t.state(() => window.__game.hud)
   assert.ok(hud.clubCard.y + hud.clubCard.h < H - 110, 'above the aim buttons')
+  await t.page.close()
+})
+
+test('the shot panel\u2019s power arc follows the meter as it builds power', async () => {
+  const t = await tv()
+  await soloGame(t)
+  await frames(t.page)
+  assert.equal(await t.state(() => window.__game.hud.power), 0, 'empty before the swing')
+  await key(t.page, 'Space') // start the meter
+  await t.page.waitForFunction(() => window.__game.state.phase === 'meter' && window.__game.state.meter.v > 0.2)
+  await frames(t.page)
+  const [power, v] = await t.state(() => [window.__game.hud.power, window.__game.state.meter.v])
+  assert.ok(power > 0.15 && Math.abs(power - v) < 0.25, `arc at ${power}, meter at ${v}`)
   await t.page.close()
 })
 

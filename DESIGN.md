@@ -181,13 +181,30 @@ flowchart LR
 - **Cover / hero:** rendered by the game's own view at full detail with the sculpted beans (`preview.html?shot=cover|hero`, dev only; `createView({ full: true })` skips light mode even on a software renderer): Pip in a bucket hat and polo finishing a drive with the crew watching, *Big Swing Golf* on top.
 
 ## The course
-One test hole for now (`src/course.js`): **Lighthouse Point**, a par 4 of 288 yards straight down the range to a raised green at the far end, falling gently toward the sea, with the lighthouse behind it. Played as real golf:
-- **Everyone tees off** in seat order, then **whoever is farthest from the pin plays next** (`nextToPlay()`), putting included, until all have holed out. Fewest strokes wins; the scorecard names each score (*Birdie!*, *Par*, *Bogey*…) and keeps a best per player (`courseBest` in the save).
+Three holes for now (`HOLES` in `src/course.js`), par 11, all on the resort's one piece of ground, each with its own tee box (turned to face its pin) and its own raised green:
+
+| Hole | Par | Yards | What it is |
+|---|---|---|---|
+| 1 **Lighthouse Point** | 4 | 288 | Straight down the range to the far end, the green falling gently toward the sea, the lighthouse behind it |
+| 2 **Beach Hut Bay** | 3 | 169 | From a forward tee on the left, across the fairway to a green against the dunes: sand and sea beyond it for a slice |
+| 3 **Shady Hill** | 4 | 249 | From the back tee on the right, the long diagonal to a higher shelf under the hills; a full driver nearly gets there |
+
+```mermaid
+stateDiagram-v2
+    [*] --> Tee: hole 1, the hole announced
+    Tee --> Play: everyone tees off in seat order
+    Play --> Play: the farthest from the pin plays next (putts on the green)
+    Play --> Tee: everyone holed out, holes 2 and 3
+    Play --> Scorecard: everyone holed out on hole 3
+```
+
+Played as real golf:
+- **Everyone tees off** in seat order, then **whoever is farthest from the pin plays next** (`nextToPlay()`), putting included, until all have holed out; then everyone moves to the next tee and the hole is announced (*Hole 2 · Beach Hut Bay · par 3 · 169 yd*). Each hole's strokes go on the player's card (`s.card`); fewest strokes over the three wins (`roundTotal()`). A holed shot is named against its hole's par (*Birdie!*, *Par*, *Bogey*…); the scorecard reads each round against the course's par (*2 under*, *Level par*, *3 over*) and keeps a best full round per player (`roundBest` in the save; `courseBest` was the one test hole's). Someone who joins mid-round takes a double bogey on each hole already played and can't set a best.
 - **Shots are played from where the ball lies** (`strike(…, { from, cup })`): the camera, the golfer and the aim line go to the ball, the aim starts on the line to the pin, and the game picks the club for the distance (`clubFor()`: the shortest one that gets there). Lies (`lieAt()` in `terrain.js`): fairway, rough, hill, beach, the green and its fringe. The sea is a penalty stroke, played again from where it was hit. A ball rolling slowly over the cup drops in (a chip-in). Picked up at 10. No marker is left where a ball stopped (the range's coloured pins): the next shot is played from right there.
 - **On the green** (or its fringe, or just off it) the shot is a putt: the putter, the putting reader on the phone (`party.public.putting`), the help's read, the same scaled bar. Gimmes inside 3 ft.
-- **On screen:** strokes and yards to the pin top left, the hole from above on the right (the pin and everyone's ball), the flag drawn bigger from far away. The range's target greens and yardage lines are hidden.
-- The green is drawn like the practice green (grid and downhill arrows) and is part of the ground (`groundHeight()`), so balls land, bounce and roll on it on the range too.
-- **Next:** more holes (a 9-hole course along the coast), sand and water hazards, walking the crew to the ball.
+- **On screen:** the hole number, its par and the stroke top left, the hole from above on the right (its tee, its green, the pin and everyone's ball), the flag drawn bigger from far away. The range's target greens, yardage lines and yardage boards are hidden (the boards are measured from the range's tee). A ball that stops on another hole's green is *Wrong green!* and is played from there with a full club.
+- Every green is drawn like the practice green (grid and downhill arrows) and is part of the ground (`groundHeight()`), so balls land, bounce and roll on them on the range too. They sit clear of the yardage boards, and no tufts grow on a green, its fringe or a tee box.
+- **Next:** more holes (toward 9 along the coast), sand and water hazards, walking the crew to the ball.
 
 ## Audio
 Club swish, impact crack (brighter and with a chime for a pure full strike), ball whistle that follows its speed, landing thump (duller in the rough), target fanfares by ring with a cheer on a bullseye, a long-drive jingle, and a bouncy loop. On the green: a soft putter click, a hollow clunk and rattle with a little fanfare when it drops, and a clink when it lips out.
@@ -198,13 +215,13 @@ Club swish, impact crack (brighter and with a chime for a pure full strike), bal
 - 3D range, a cartoon golfer that follows your swing, ball flight with curve, bounce and roll, chase camera
 - Practice with a full shot readout and a shot map; Target challenge (10 balls each, five greens)
 - The putting green: putting practice and a 9-hole Putting challenge, with slopes, break, lip-outs and a putting stroke on the phone
-- The course: one test hole (par 4), farthest from the pin plays next
+- The course: three holes (par 11), farthest from the pin plays next
 - 1–4 seats, meter and flick fallbacks, settings for swing power, straight-shot help, golfer hand, flip hook/slice
 
 **Next**
 - **Real character art** for the chosen cast, and the resort taken further toward the concepts
 - **Mini golf:** the putting green's stroke and roll on toy holes with obstacles, holes in one sitting
-- **Full courses:** from the test hole to 9 holes along the coast, with sand and water hazards
+- **Full courses:** from three holes to 9 along the coast, with sand and water hazards; then other places (snow, a volcano…)
 - Personal swing calibration (a few practice swings set *full* per player), wind, a longest-drive contest
 - **Its own repo** for Discover (see below)
 
@@ -212,8 +229,8 @@ Club swish, impact crack (brighter and with a chime for a pure full strike), bal
 **Play**
 - [x] Onboarding by doing: the TV and phone say how to hold the phone and what to press; the readout says what your swing did
 - [x] Clear goals: yardage and the shot map in practice; points and a ranking in the Target challenge; retry in one press
-- [x] The course: one test hole, real stroke play
-- [ ] Mini golf, and more holes (next versions)
+- [x] The course: three holes, real stroke play
+- [ ] Mini golf, and a longer course (next versions)
 
 **Feel**
 - [x] Feedback for every action: crack, chase cam, yardage counter, shot name, phone buzz; confetti and shake on target hits (shake off with Reduced shake)
@@ -238,9 +255,9 @@ Club swish, impact crack (brighter and with a chime for a pure full strike), bal
 - `swing.test.mjs`: the swing reader against a simulated golfer (`swing-sim.mjs`): square, open, closed, path, left-handed, a twisted grip, 60 Hz, a gyro that tops out, letting go early, a waggle; a putting stroke with the putting settings (speed, square and open face, longer is faster), which the full swing's settings ignore.
 - `putting.test.mjs`: the green: a putt rolls as far as its speed says, drops at the right pace, hops the cup when too firm, lips out off the edge, breaks downhill, comes up short uphill, dies in the fringe; every challenge hole can be holed, and the help's read holes each one; the help aims uphill on a side slope; a firm putt into the side of the cup drops; a ball dying beside the rim is drawn in; practice putts cycle short, middling, long; the backstroke sets the distance in proportion, the bar scaled to the putt (halfway back is the cup, 2° costs under a foot on a 3-footer), a gentle through-stroke comes up softer; help; describing a miss; fewest putts ranks first.
 - `shot.test.mjs`: distances per club, half swings, curves, aim, shot names, power settings, help, overswing, target scoring; a drive hops twice and trickles out rather than stopping dead.
-- `course.test.mjs`: a ball onto the hills settles within a few seconds; the hole (par 4, about 290 yards, the pin on a raised green); a good drive finds the fairway and the picked club reaches the green; a slow ball over the cup drops in, a fast one doesn't; farthest plays next (tee in seat order, holed-out and disconnected players skipped); score names and the scoreboard; the club for a distance.
+- `course.test.mjs`: the course (three holes, par 11, each tee on the flat and each pin on its own raised green, none overlapping; every hole playable with the club the game picks; a round scored over its holes and read against par); a ball onto the hills settles within a few seconds; the hole (par 4, about 290 yards, the pin on a raised green); a good drive finds the fairway and the picked club reaches the green; a slow ball over the cup drops in, a fast one doesn't; farthest plays next (tee in seat order, holed-out and disconnected players skipped); score names and the scoreboard; the club for a distance.
 - `phone.test.mjs`: the real phone page with faked sensors: SET and swing sends the shot, live angle, clubs and aim, the touch pad, someone else's turn.
-- `terrain.test.mjs`: the range is flat (apart from the course green at the end), hills left, sea right and past the end; a big slice splashes and stays in the sea, a hook lands on the hillside, a straight drive stays dry.
+- `terrain.test.mjs`: the range is flat (apart from the course's greens), hills left, sea right and past the end; a big slice splashes and stays in the sea, a hook lands on the hillside, a straight drive stays dry.
 - `tv.test.mjs`: the TV with fake phones: each player gets a different golfer (a latecomer the next one), a 7-iron goes 155, an open face curves right, turns and out-of-turn shots, a full Target challenge.
 - `phone.test.mjs` also checks the phone shows which golfer you are, in their colour, and the safety card (SET covered until I'm ready, which tells the TV).
 - `lighting.test.mjs`: the sky light has the photo's sun taken out and leaves the open sky as it was.
@@ -257,6 +274,7 @@ Club swish, impact crack (brighter and with a chime for a pure full strike), bal
 The game started in the `my-pushplay-games` workshop and was moved into its own repo with its history. That repo is now `Visual-Zone-Development/big-swing-golf` (called `seaside-swing` until 0.10.1), and the launcher follows it.
 
 ## Changelog
+- 0.11.0: **Three holes.** The course is now a round of three, par 11: *Lighthouse Point* (par 4, 288 yd), then *Beach Hut Bay* (par 3, 169 yd, across to a green by the dunes) and *Shady Hill* (par 4, 249 yd, to a shelf under the hills), each from its own tee box. When everyone has holed out the next hole is announced and all move to its tee; the scorecard adds the three up and reads them against par, and the best full round is saved per name (a new best: the old one was for a single hole). On the course the range's yardage boards are hidden.
 - 0.10.2: **A proper scorecard at the end.** The results are one navy card in the clubhouse rail's style, centred whatever the number of players: the hole or challenge name, a row per player (the winner ringed in gold, *Birdie!* and *Par* as lime labels, *New best!* as a teal label beside the name) and the rail's tiles for Play again, Choose a game and Quit to title. Before, the rows and the buttons floated apart over the scene. **The hole is whole**: the cup and its white liner now lie on the green's slope; laid flat, the uphill half sank into a sloping green.
 - 0.10.1: **New id `big-swing-golf`** (was `seaside-swing`): saves start fresh under `big-swing-golf-save-v1`, and the launcher lists it as a new game. The repo is renamed to match, `Visual-Zone-Development/big-swing-golf`.
 - 0.10.0: **Renamed Big Swing Golf** (was Seaside Swing), because more courses are planned beyond the seaside (snow, a volcano and others); Seaside becomes the first course's name.

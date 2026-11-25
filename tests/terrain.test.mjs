@@ -2,7 +2,7 @@
 // end, and balls that land on it. No browser needed. Run: node --test games/big-swing-golf/tests/
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { HOLE } from '../src/course.js'
+import { HOLES } from '../src/course.js'
 import { greenSurface } from '../src/green.js'
 import { CLUBS, TUNING, YD } from '../src/tuning.js'
 import { simulate } from '../src/flight.js'
@@ -10,10 +10,10 @@ import { fairwayHalf, groundHeight, SEA_LEVEL, surfaceAt } from '../src/terrain.
 
 const driver = CLUBS[0]
 
-test('the whole range is flat, out to the rough and to the back of it (apart from the course green)', () => {
+test('the whole range is flat, out to the rough and to the back of it (apart from the course’s greens)', () => {
   for (let z = 0; z <= TUNING.range.length * YD; z += 20) {
     for (const x of [-fairwayHalf(z) - 15, 0, fairwayHalf(z) + 15]) {
-      if (greenSurface(x, z, HOLE.green) !== 'off') continue // the course's green sits raised at the end
+      if (HOLES.some((h) => greenSurface(x, z, h.green) !== 'off')) continue // the course's greens sit raised
       assert.equal(groundHeight(x, z), 0, `not flat at x ${x.toFixed(0)}, z ${z}`)
       assert.equal(surfaceAt(x, z), 'range')
     }

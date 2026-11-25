@@ -588,7 +588,7 @@ test('every menu’s words stay inside their boxes at every text size, and the S
   await t.page.close()
 })
 
-test('the course: two phones tee off in turn, the farthest from the pin plays next, the green switches to putting, and holing out ends the round with a scorecard', async () => {
+test('the course: two phones tee off in turn, the farthest from the pin plays next, the green switches to putting, holing out moves everyone to the next tee, and the third hole ends the round with a scorecard', async () => {
   const t = await tv()
   await chooseMode(t, 4) // the course
   await startParty(t, [['p1', 'Ada'], ['p2', 'Bo']])
@@ -637,11 +637,42 @@ test('the course: two phones tee off in turn, the farthest from the pin plays ne
   const back1 = await t.state(() => window.__game.party.views.p1.puttMark * window.__game.party.public.swing.backFull)
   t.say('p1', { shot: { ...putt(400), back: back1 } })
   await t.page.waitForFunction(() => window.__game.state.phase === 'result', null, { timeout: 10000 })
-  await t.page.evaluate(() => (window.__game.state.resultTime = 99))
+  // Everyone is in: on to the second tee, the first hole on each card, the hole announced.
+  await next()
+  assert.equal(await t.state(() => window.__game.state.hole), 1)
+  assert.equal(await t.state(() => window.__game.state.banner?.text), 'Hole 2')
+  assert.match(await t.state(() => window.__game.state.banner?.sub), /^Beach Hut Bay · par 3 · \d+ yd$/)
+  let seats = await t.state(() => window.__game.state.seats.map((s) => ({ strokes: s.strokes, done: s.done, card: s.card, ball: s.ball, cup: s.cup })))
+  assert.equal(seats[0].card[0], 2) // a drive and a putt
+  assert.ok(seats.every((s) => s.strokes === 0 && !s.done && s.ball.x === -26 && s.cup.x === 42), 'both on the second tee, playing to its pin')
+  assert.match(await t.state(() => window.__game.party.public.ballsLeft), /^Hole 2 of 3 · Beach Hut Bay · par 3/)
+  assert.equal(await t.state(() => window.__game.party.public.turn), 'p1')
+  // Holes two and three: both placed by the pin, each holes out with one putt.
+  for (const n of [1, 2]) {
+    await t.page.evaluate(() => {
+      const g = window.__game
+      const cup = g.state.seats[0].cup
+      g.state.seats[0].ball = { x: cup.x, z: cup.z - 0.5 }
+      g.state.seats[1].ball = { x: cup.x - 0.6, z: cup.z - 0.6 }
+      g.state.resultTime = 99
+      g.state.phase = 'result'
+    })
+    for (const id of ['p2', 'p1']) {
+      await t.page.waitForFunction((id) => window.__game.state.phase === 'aim' && window.__game.party.public.putting === true && window.__game.party.public.turn === id, id)
+      const b = await t.page.evaluate((id) => window.__game.party.views[id].puttMark * window.__game.party.public.swing.backFull, id)
+      t.say(id, { shot: { ...putt(400), back: b } })
+      await t.page.waitForFunction(() => window.__game.state.phase === 'result', null, { timeout: 10000 })
+      await t.page.evaluate(() => (window.__game.state.resultTime = 99))
+    }
+    if (n === 1) await t.page.waitForFunction(() => window.__game.state.hole === 2 && window.__game.state.phase === 'aim')
+  }
   await t.page.waitForFunction(() => window.__game.state.screen === 'gameover')
-  const seats = await t.state(() => window.__game.state.seats.map((s) => ({ strokes: s.strokes, done: s.done })))
+  seats = await t.state(() => window.__game.state.seats.map((s) => ({ done: s.done, card: s.card, newBest: s.newBest })))
   assert.ok(seats.every((s) => s.done))
-  assert.equal(seats[0].strokes, 2) // a drive and a putt
+  assert.deepEqual(seats[0].card, [2, 1, 1]) // a drive and a putt, then a putt on each of the others
+  assert.equal(seats[0].newBest, true)
+  assert.equal(await t.state(() => window.__game.party.public.cards[0].score), '4 ✓')
+  assert.equal(await t.state(() => JSON.parse(localStorage.getItem('big-swing-golf-save-v1')).roundBest.Ada), 4)
   assert.equal(await t.state(() => window.__game.party.public.menu?.title), 'Round over')
   assert.deepEqual(t.errors, [])
   await t.page.close()

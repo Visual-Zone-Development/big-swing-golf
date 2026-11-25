@@ -9,7 +9,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import { TUNING, YD } from './tuning.js'
 import { fairwayHalf, groundHeight, landHeight, SEA_LEVEL, surfaceAt } from './terrain.js'
-import { HOLE } from './course.js'
+import { HOLES } from './course.js'
 import { GREEN, greenReach, puttHeight, slopeAt } from './putting.js'
 import { createTufts, grassMaterial, grassUVs, setGrassDetail } from './grass.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
@@ -128,6 +128,9 @@ export function createScenery(scene) {
   scene.add(fairway)
   const lineMat = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.45, depthWrite: false })
   const lines = []
+  // The range's yardage boards: measured from the range's tee, so hidden on the course.
+  const boards = new THREE.Group()
+  scene.add(boards)
   for (let yd = 50; yd <= 250; yd += 50) {
     const z = yd * YD
     lines.push(new THREE.PlaneGeometry(fairwayHalf(z) * 2 - 4, 0.45).rotateX(-Math.PI / 2).translate(0, 0.02, -z))
@@ -135,7 +138,7 @@ export function createScenery(scene) {
       const board = yardBoard(yd)
       board.position.set(side * (fairwayHalf(z) + 7), 0, -z)
       board.rotation.y = -side * 0.35
-      scene.add(board)
+      boards.add(board)
     }
   }
   const yardLines = new THREE.Mesh(mergeGeometries(lines), lineMat)
@@ -236,22 +239,29 @@ export function createScenery(scene) {
   addClouds(scene)
 
   // ---- the tee ---------------------------------------------------------------------------------
-  const teeBox = new THREE.Mesh(
-    grassUVs(new THREE.LatheGeometry([[0, 0.07], [2.55, 0.07], [2.75, 0.04], [2.85, -0.02], [2.9, -0.06]].map(([x, y]) => new THREE.Vector2(x, y)), 40)),
-    grassMaterial({ color: COLORS.tee, stripes: true, stripe: 0.9, stripeAngle: Math.PI / 2, patch: 0.05, bump: 0.5, side: THREE.DoubleSide })
-  )
-  teeBox.position.set(0, 0, 0.4)
-  teeBox.receiveShadow = true
-  scene.add(teeBox)
-  const tee = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.01, 0.06, 8), new THREE.MeshStandardMaterial({ color: '#ffd23f' }))
-  tee.position.set(0, 0.09, 0)
-  scene.add(tee)
-  // Tee markers: two big glossy balls, and a basket of balls.
-  for (const s of [-1, 1]) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(0.18, 16, 12), new THREE.MeshStandardMaterial({ color: s < 0 ? '#ff5c8a' : '#2ad1c9', roughness: 0.3 }))
-    m.position.set(s * 2.1, 0.15, -1.6)
-    m.castShadow = true
-    scene.add(m)
+  // One at every hole's tee: a rounded mown box, a tee peg and two big glossy ball markers. The
+  // first is the range's tee too.
+  const teeGeo = grassUVs(new THREE.LatheGeometry([[0, 0.07], [2.55, 0.07], [2.75, 0.04], [2.85, -0.02], [2.9, -0.06]].map(([x, y]) => new THREE.Vector2(x, y)), 40))
+  const teeMat = grassMaterial({ color: COLORS.tee, stripes: true, stripe: 0.9, stripeAngle: Math.PI / 2, patch: 0.05, bump: 0.5, side: THREE.DoubleSide })
+  const pegMat = new THREE.MeshStandardMaterial({ color: '#ffd23f' })
+  for (const { tee: at, cup } of HOLES) {
+    // Turned to face its pin (three.js puts game z at -z).
+    const box = new THREE.Group()
+    box.position.set(at.x, 0, -at.z)
+    box.rotation.y = -Math.atan2(cup.x - at.x, cup.z - at.z)
+    scene.add(box)
+    const teeBox = new THREE.Mesh(teeGeo, teeMat)
+    teeBox.position.set(0, 0, 0.4)
+    teeBox.receiveShadow = true
+    const tee = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.01, 0.06, 8), pegMat)
+    tee.position.set(0, 0.09, 0)
+    box.add(teeBox, tee)
+    for (const s of [-1, 1]) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(0.18, 16, 12), new THREE.MeshStandardMaterial({ color: s < 0 ? '#ff5c8a' : '#2ad1c9', roughness: 0.3 }))
+      m.position.set(s * 2.1, 0.15, -1.6)
+      m.castShadow = true
+      box.add(m)
+    }
   }
   const basket = new THREE.Group()
   basket.add(new THREE.Mesh(new THREE.LatheGeometry([[0.12, 0], [0.24, 0.04], [0.3, 0.24], [0.28, 0.26]].map(([x, y]) => new THREE.Vector2(x, y)), 18), new THREE.MeshStandardMaterial({ color: '#d59a57', side: THREE.DoubleSide })))
@@ -293,15 +303,16 @@ export function createScenery(scene) {
   const putting = puttingGreen()
   putting.visible = false
   scene.add(putting)
-  // ---- the course's green, at the far end of the range (always there) -------------------------------
-  const courseGreen = puttingGreen(HOLE.green)
-  scene.add(courseGreen)
+  // ---- the course's greens (always there) --------------------------------------------------------------
+  for (const hole of HOLES) scene.add(puttingGreen(hole.green))
 
   // ---- tufts: grass standing up out of the rough, where the camera is close ----------------------------
   const tuftRand = rng(97)
   const tuftItems = []
   const roughTones = ['#74c04a', '#82c955', '#6bb543', '#8dd05c', '#99d866']
-  const tuft = (x, z, s = 1, tones = roughTones) => tuftItems.push({ x, z, y: groundHeight(x, z), s: s * (0.75 + tuftRand() * 0.6), r: tuftRand() * Math.PI, color: tones[Math.floor(tuftRand() * tones.length)] })
+  // No tufts on the course's greens or their fringes, or on a tee box.
+  const mown = (x, z) => HOLES.some((h) => greenReach(x, z, h.green) < 1 + h.green.fringe * 1.05 || Math.hypot(x - h.tee.x, z - h.tee.z) < 3.6)
+  const tuft = (x, z, s = 1, tones = roughTones) => !mown(x, z) && tuftItems.push({ x, z, y: groundHeight(x, z), s: s * (0.75 + tuftRand() * 0.6), r: tuftRand() * Math.PI, color: tones[Math.floor(tuftRand() * tones.length)] })
   // The rough either side of the fairway, thick near the tee and thinning out downrange.
   for (let i = 0; i < 2600; i++) {
     const z = -6 + Math.pow(tuftRand(), 1.8) * 170
@@ -332,9 +343,9 @@ export function createScenery(scene) {
   }
   const ringTufts = createTufts(ringItems)
   greens.add(ringTufts.mesh)
-  // Round the course's green.
-  for (let i = 0; i < 500; i++) {
-    const G = HOLE.green
+  // Round each of the course's greens.
+  for (let i = 0; i < 500 * HOLES.length; i++) {
+    const G = HOLES[i % HOLES.length].green
     const a = tuftRand() * Math.PI * 2
     const e = 1 + G.fringe * (1.05 + tuftRand() * 1.4)
     tuft(G.x + Math.cos(a) * G.rx * e, G.z + Math.sin(a) * G.rz * e, 1)
@@ -365,6 +376,7 @@ export function createScenery(scene) {
     setTargets(on) {
       greens.visible = on
       yardLines.visible = on
+      boards.visible = on
     },
     /** Light mode (slow machines): drop the small stuff nobody misses. */
     setLight(light) {

@@ -513,6 +513,26 @@ test('inside the launcher the title rail ends with Quit to library, and choosing
   await t.page.close()
 })
 
+test('paused, the menu is the clubhouse rail down the left (Quit to library in the launcher), and the course goes soft behind it', async () => {
+  const t = await tv({ launcher: true })
+  await soloGame(t)
+  await key(t.page, 'Escape')
+  await t.page.waitForFunction(() => window.__game.state.screen === 'paused')
+  await frames(t.page)
+  const ids = await t.state(() => window.__game.pauseMenu.items.map((i) => i.id))
+  assert.deepEqual(ids, ['resume', 'restart', 'pick', 'settings', 'title', 'quit-to-library'])
+  const rects = await t.state(() => window.__game.pauseMenu.items.map((_, i) => window.__game.pauseMenu.rect(i)))
+  for (const r of rects) assert.ok(r.x >= 0 && r.x + r.w <= 400, `tile inside the rail: ${r.x}..${r.x + r.w}`)
+  assert.ok(rects.at(-1).y + rects.at(-1).h <= 740, 'clear of the prompts')
+  assert.equal(await t.state(() => window.__game.hud.pauseRail), true)
+  assert.match(await t.page.evaluate(() => document.getElementById('gl').style.filter), /blur/)
+  await key(t.page, 'Enter') // Resume
+  await t.page.waitForFunction(() => window.__game.state.screen === 'playing')
+  assert.equal(await t.page.evaluate(() => document.getElementById('gl').style.filter), '')
+  assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
 test('outside the launcher the title has no Quit tile: a browser tab can’t close itself', async () => {
   const t = await tv()
   assert.ok(!(await t.state(() => window.__game.titleMenu.items.some((i) => i.id === 'quit-to-library'))))
@@ -945,20 +965,35 @@ test('on the putting green the club card is the putter and the flag tag is in fe
   await t.page.close()
 })
 
-test('the how-to sits in a pill clear of the club card, and with a mouse the club card moves up clear of the touch buttons', async () => {
+test('the shot panel sits bottom right with the how-to in a card just above it, and with a mouse it moves up clear of the touch buttons', async () => {
   const t = await tv()
   await soloGame(t)
   await frames(t.page)
   let hud = await t.state(() => window.__game.hud)
-  const H = await t.page.evaluate(() => innerHeight)
+  const [W, H] = await t.page.evaluate(() => [innerWidth, innerHeight])
   assert.ok(hud.hintPill, 'the how-to shows on the first turn')
-  assert.ok(hud.clubCard.x + hud.clubCard.w < 640 - hud.hintPill.w / 2, 'side by side, not on top of each other')
+  assert.ok(hud.clubCard.x > W / 2, 'the shot panel is on the right, clear of the golfer')
+  assert.ok(hud.hintPill.y + hud.hintPill.h <= hud.clubCard.y, 'the how-to is above the shot panel, not on it')
+  assert.equal(Math.round(hud.hintPill.x + hud.hintPill.w), Math.round(hud.clubCard.x + hud.clubCard.w), 'their right edges line up')
   assert.ok(hud.clubCard.y + hud.clubCard.h <= H - 20, 'on the bottom edge with keys')
   await t.page.mouse.move(640, 400)
   await t.page.mouse.move(660, 420)
   await frames(t.page, 3)
   hud = await t.state(() => window.__game.hud)
   assert.ok(hud.clubCard.y + hud.clubCard.h < H - 110, 'above the aim buttons')
+  await t.page.close()
+})
+
+test('the shot panel\u2019s power arc follows the meter as it builds power', async () => {
+  const t = await tv()
+  await soloGame(t)
+  await frames(t.page)
+  assert.equal(await t.state(() => window.__game.hud.power), 0, 'empty before the swing')
+  await key(t.page, 'Space') // start the meter
+  await t.page.waitForFunction(() => window.__game.state.phase === 'meter' && window.__game.state.meter.v > 0.2)
+  await frames(t.page)
+  const [power, v] = await t.state(() => [window.__game.hud.power, window.__game.state.meter.v])
+  assert.ok(power > 0.15 && Math.abs(power - v) < 0.25, `arc at ${power}, meter at ${v}`)
   await t.page.close()
 })
 

@@ -206,8 +206,10 @@ const pauseMenu = createMenu(
     { id: 'settings', label: 'Settings' },
     { id: 'title', label: 'Quit to title' }
   ],
-  { y: H / 2 - 110, accent: GOLD }
+  // The clubhouse rail, as on the title (drawPause()); Quit to library joins it in the launcher.
+  { y: 236, width: 330, height: 70, gap: 12, accent: GOLD }
 )
+const pauseLift = pauseMenu.items.some((i) => i.id === QUIT_TO_LIBRARY) ? (70 + 12) / 2 : 0
 const overMenu = createMenu(
   [
     { id: 'again', label: 'Play again' },
@@ -259,7 +261,7 @@ function layout() {
   titleMenu.place({ x: RAIL.w / 2, y: 244 + DY + titleLift })
   wardrobeMenu.place({ x: RAIL.w / 2, y: 244 + DY })
   pickMenu.place({ x: RAIL.w / 2, y: 236 + DY })
-  pauseMenu.place({ x: W / 2, y: H / 2 - 110 })
+  pauseMenu.place({ x: RAIL.w / 2, y: 206 + DY + pauseLift })
   overMenu.place({ x: W / 2, y: 560 + DY })
   settingsScreen.place({ x: W / 2, y: 190 + DY })
 }
@@ -798,7 +800,7 @@ function flightUpdate(dt) {
         view.burst(fl.carry, [TUNING.targets.greens[sc.green].color, GOLD, '#ffffff', TEAL], sc.ring === 0 ? 120 : 60)
         view.bump(sc.ring === 0 ? 0.8 : 0.4)
         buzz(sh.seat, sc.ring === 0 ? 220 : 100)
-        state.banner = { text: `+${sc.points}`, sub: sc.name, color: GOLD, t: 0 }
+        state.banner = { text: `+${sc.points}`, sub: sc.name, color: GOLD, t: 0, points: sc.points }
       } else {
         sfx.miss()
         view.react(sh.seat.look, 'sad')
@@ -1270,6 +1272,9 @@ function draw(dt) {
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   canvas.style.cursor = state.screen === 'playing' && input.mode === 'mouse' && state.phase === 'flight' ? 'none' : ''
+  // Paused: the course goes soft and dim behind the rail.
+  const soft = state.screen === 'paused' ? 'blur(4px) brightness(0.62) saturate(0.85)' : ''
+  if (glCanvas.style.filter !== soft) glCanvas.style.filter = soft
 
   if (state.screen === 'title' || state.screen === 'wardrobe' || state.screen === 'pick') drawTitle()
   else if (state.screen === 'settings') {
@@ -1279,14 +1284,53 @@ function draw(dt) {
     lobby.draw(ctx, W, H)
   } else if (state.screen === 'gameover') drawResults()
   else {
-    drawHud(s)
-    if (state.screen === 'paused') {
-      veil(0.6)
-      text('Paused', W / 2, H / 2 - 250, head(64), INK)
-      pauseMenu.draw(ctx, fitFont(rubik, 28 * ts(), 380, ...pauseMenu.items.map((it) => it.label)))
-    }
+    if (state.screen === 'paused') drawPause(s)
+    else drawHud(s)
   }
   if (debug) drawDebug()
+}
+
+/**
+ * Paused: the clubhouse rail, as on the title (the course soft and dim behind it), with what's
+ * being played under the word, and a cream card with the scores so far.
+ */
+function drawPause(s) {
+  hud = {}
+  ctx.save()
+  ctx.fillStyle = 'rgba(11,26,54,0.95)'
+  ctx.beginPath()
+  ctx.roundRect(-RAIL.radius, 0, RAIL.w + RAIL.radius, H, RAIL.radius)
+  ctx.fill()
+  ctx.restore()
+  const rs = Math.min(ts(), 1.2)
+  text('Paused', 34, 92 + DY, lilita(70), GOLD, 'left')
+  const what = state.resumeTo === 'lobby' ? 'Waiting for players' : (MODES.find((m) => m.value === state.mode)?.title ?? '')
+  plain(what, 36, 150 + DY, fitFont((px) => rubik(px, 500), 19 * rs, RAIL.w - 70, what), QUIET, 'left')
+  railTiles(pauseMenu, rs)
+  hud.pauseRail = true
+  // The scores so far (once there are any to show).
+  const seats = state.resumeTo === 'lobby' ? [] : state.seats
+  if (!seats.length) return
+  const x = RAIL.w + 46
+  const w = W - x - 48
+  const cs = Math.min(ts(), 1.25)
+  const h = Math.round(118 * cs)
+  const y = H - 48 - h
+  panel(x, y + 8, w, h, 26, 'rgba(11,26,54,0.35)')
+  panel(x, y, w, h, 26, INK)
+  plain('The scores so far', x + 30, y + 36 * cs, lilita(30 * cs), '#0b1a36', 'left')
+  const col = (w - 60) / Math.min(4, seats.length)
+  seats.slice(0, 4).forEach((o, i) => {
+    const cx = x + 30 + i * col
+    const cy = y + h - 36 * cs
+    dot(cx + 14, cy, 15, '#e5d9c2')
+    dot(cx + 14, cy, 12, o.color)
+    const name = o.name.slice(0, 10)
+    const nf = fitFont(rubik, 20 * cs, col - 90, name)
+    plain(name, cx + 36, cy + 1, nf, '#0b1a36', 'left')
+    ctx.font = nf
+    plain(scoreText(o), cx + 44 + ctx.measureText(name).width, cy + 1, rubik(20 * cs), '#5b6b8c', 'left')
+  })
 }
 
 /** The help's guide: the roll at the current aim and the help's pace (cached until the aim moves). */
@@ -1352,6 +1396,47 @@ function dot(x, y, r, color) {
   ctx.fill()
 }
 
+/** The rail's tiles for a menu (menu.js handles the input), and the prompts along its foot. */
+function railTiles(menu, rs, wardrobe = false) {
+  menu.items.forEach((it, i) => {
+    const r = menu.rect(i)
+    const on = it === menu.selected
+    ctx.save()
+    if (on) {
+      ctx.fillStyle = '#c99a12'
+      ctx.beginPath()
+      ctx.roundRect(r.x, r.y + 6, r.w, r.h, 20)
+      ctx.fill()
+    }
+    ctx.fillStyle = on ? GOLD : '#16305a'
+    ctx.beginPath()
+    ctx.roundRect(r.x, r.y, r.w, r.h, 20)
+    ctx.fill()
+    ctx.restore()
+    railIcon(it.id, r.x + 14, r.y + r.h / 2 - 21, on)
+    const ink = on ? '#0b1a36' : INK
+    const room = r.w - 70 - 16
+    if (it.type) {
+      // Room for the ‹ › arrows whether or not it's selected, so the text doesn't jump.
+      const value = menu.display(it)
+      ;(on ? plain : text)(it.label, r.x + 70, r.y + 24, fitFont(rubik, 19 * rs, room - 56, it.label), on ? '#0b1a36' : QUIET, 'left')
+      ;(on ? plain : text)(value, r.x + 70, r.y + 50, fitFont(rubik, 21 * rs, room - 56, value), ink, 'left')
+      if (on) plain('‹  ›', r.x + r.w - 18, r.y + r.h / 2 + 1, rubik(26), ink, 'right')
+    } else (on ? plain : text)(it.label, r.x + 70, r.y + r.h / 2 + 1, fitFont(rubik, 23 * rs, room, it.label), ink, 'left')
+  })
+  const prompt = (label, words, x, y) => {
+    ctx.font = rubik(17 * rs)
+    const w = ctx.measureText(label).width + 16
+    panel(x, y - 13 * rs, w, 26 * rs, 7, INK)
+    plain(label, x + w / 2, y + 1, rubik(17 * rs), '#0b1a36')
+    plain(words, x + w + 8, y + 1, rubik(17 * rs, 500), QUIET, 'left')
+    ctx.font = rubik(17 * rs, 500)
+    return x + w + 8 + ctx.measureText(words).width + 18
+  }
+  let px = wardrobe ? prompt('◀ ▶', 'change', 34, H - 40) : prompt(input.label('a'), 'choose', 34, H - 40)
+  prompt(input.dpadLabel(), 'move', px, H - 40)
+}
+
 /** The clubhouse rail's size: a navy column down the left, the crew in the scene to its right. */
 const RAIL = { w: 400, radius: 40 }
 /** What each title item does, in the card at the bottom right. */
@@ -1392,44 +1477,7 @@ function drawTitle() {
     text('Golf', 34, 160 + DY, lilita(74), LIME, 'left')
   }
   if (wardrobe) text('Wardrobe', RAIL.w - 34, 160 + DY, rubik(22 * rs), QUIET, 'right')
-  // The tiles: menu.js handles the input; this draws them as the rail's tiles.
-  menu.items.forEach((it, i) => {
-    const r = menu.rect(i)
-    const on = it === menu.selected
-    ctx.save()
-    if (on) {
-      ctx.fillStyle = '#c99a12'
-      ctx.beginPath()
-      ctx.roundRect(r.x, r.y + 6, r.w, r.h, 20)
-      ctx.fill()
-    }
-    ctx.fillStyle = on ? GOLD : '#16305a'
-    ctx.beginPath()
-    ctx.roundRect(r.x, r.y, r.w, r.h, 20)
-    ctx.fill()
-    ctx.restore()
-    railIcon(it.id, r.x + 14, r.y + r.h / 2 - 21, on)
-    const ink = on ? '#0b1a36' : INK
-    const room = r.w - 70 - 16
-    if (it.type) {
-      // Room for the ‹ › arrows whether or not it's selected, so the text doesn't jump.
-      const value = menu.display(it)
-      ;(on ? plain : text)(it.label, r.x + 70, r.y + 24, fitFont(rubik, 19 * rs, room - 56, it.label), on ? '#0b1a36' : QUIET, 'left')
-      ;(on ? plain : text)(value, r.x + 70, r.y + 50, fitFont(rubik, 21 * rs, room - 56, value), ink, 'left')
-      if (on) plain('‹  ›', r.x + r.w - 18, r.y + r.h / 2 + 1, rubik(26), ink, 'right')
-    } else (on ? plain : text)(it.label, r.x + 70, r.y + r.h / 2 + 1, fitFont(rubik, 23 * rs, room, it.label), ink, 'left')
-  })
-  const prompt = (label, words, x, y) => {
-    ctx.font = rubik(17 * rs)
-    const w = ctx.measureText(label).width + 16
-    panel(x, y - 13 * rs, w, 26 * rs, 7, INK)
-    plain(label, x + w / 2, y + 1, rubik(17 * rs), '#0b1a36')
-    plain(words, x + w + 8, y + 1, rubik(17 * rs, 500), QUIET, 'left')
-    ctx.font = rubik(17 * rs, 500)
-    return x + w + 8 + ctx.measureText(words).width + 18
-  }
-  let px = wardrobe ? prompt('◀ ▶', 'change', 34, H - 40) : prompt(input.label('a'), 'choose', 34, H - 40)
-  prompt(input.dpadLabel(), 'move', px, H - 40)
+  railTiles(menu, rs, wardrobe)
   // The card: what the highlighted tile does.
   if (wardrobe) return
   const sel = menu.selected?.id
@@ -1738,7 +1786,36 @@ function railIcon(id, x, y, on) {
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   ctx.beginPath()
-  if (id === QUIT_TO_LIBRARY) {
+  if (id === 'resume') {
+    ctx.moveTo(-5, -9)
+    ctx.lineTo(9, 0)
+    ctx.lineTo(-5, 9)
+    ctx.closePath()
+  } else if (id === 'restart') {
+    ctx.arc(0, 0, 9, -Math.PI * 0.35, Math.PI * 1.45)
+    ctx.moveTo(9, -10)
+    ctx.lineTo(6, -3)
+    ctx.lineTo(-1, -6)
+  } else if (id === 'pick') {
+    // Four tiles: choose a game.
+    ctx.roundRect(-10, -10, 8, 8, 2)
+    ctx.roundRect(2, -10, 8, 8, 2)
+    ctx.roundRect(-10, 2, 8, 8, 2)
+    ctx.roundRect(2, 2, 8, 8, 2)
+  } else if (id === 'title') {
+    // A clubhouse.
+    ctx.moveTo(-10, -1)
+    ctx.lineTo(0, -10)
+    ctx.lineTo(10, -1)
+    ctx.moveTo(-7, -3)
+    ctx.lineTo(-7, 9)
+    ctx.lineTo(7, 9)
+    ctx.lineTo(7, -3)
+    ctx.moveTo(-2, 9)
+    ctx.lineTo(-2, 3)
+    ctx.lineTo(2, 3)
+    ctx.lineTo(2, 9)
+  } else if (id === QUIT_TO_LIBRARY) {
     // A door with an arrow out of it.
     ctx.moveTo(1, -10)
     ctx.lineTo(9, -10)
@@ -1865,11 +1942,12 @@ function hint(kind) {
 }
 
 /**
- * The HUD, game-style corners (after Mario Golf): a hole badge top left (when there's a hole,
- * ball or stroke to count), the club card bottom left, a name tag over the golfer and the
- * distance over the flag, in the scene; everyone's score bottom right with two or more players.
- * The middle of the screen is left to the golf: how-to text only when it helps, one result
- * said once, and a phone player's detailed numbers on their phone.
+ * The HUD, game-style corners: a hole card top left (when there's a hole, ball or stroke to
+ * count), everyone's chip along the top with two or more players (the one up raised), the shot
+ * panel bottom right (the club and a power arc), a name tag over the golfer and the distance over
+ * the flag, in the scene. The middle of the screen is left to the golf: how-to only when it
+ * helps (in a card over the shot panel), one result said once as a ribbon, and a phone player's
+ * detailed numbers on their phone.
  */
 function drawHud(s) {
   hud = {}
@@ -1890,22 +1968,8 @@ function drawHud(s) {
     ctx.fillRect(PAUSE_BUTTON.x + 18, PAUSE_BUTTON.y + 16, 7, 24)
     ctx.fillRect(PAUSE_BUTTON.x + 31, PAUSE_BUTTON.y + 16, 7, 24)
   }
-  // Scores, bottom right: only when there's someone to compare with.
-  if (state.seats.length > 1) {
-    hud.scoreboard = true
-    const rs = Math.min(ts(), 1.2)
-    const rowH = Math.round(30 * rs)
-    const n = state.seats.length
-    const top = H - 28 - n * rowH - 16
-    panel(W - 248, top, 220, n * rowH + 16, 18, 'rgba(11,26,54,0.55)')
-    state.seats.forEach((o, i) => {
-      const y = top + 8 + i * rowH + rowH / 2
-      dot(W - 228, y, 6, o.color)
-      const name = o.name.slice(0, 10)
-      text(name, W - 214, y + 1, fitFont((px) => rubik(px, 700), 17 * rs, 120, name), connected(o) ? INK : QUIET, 'left')
-      text(scoreText(o), W - 44, y + 1, rubik(18 * rs), o === s ? GOLD : INK, 'right')
-    })
-  }
+  // Everyone's chip along the top: only when there's someone to compare with.
+  if (state.seats.length > 1) playerStrip(s)
 
   if (state.phase === 'safety') return drawSafety()
   // The middle and bottom of the HUD sit DY lower on a taller screen.
@@ -1917,46 +1981,141 @@ function drawHud(s) {
     // Rolling: how far it still is from the cup.
     const p = state.shot.pos
     const ft = Math.hypot(p.x - state.shot.cup.x, p.z - state.shot.cup.z) / FT
-    text(ft < 10 ? ft.toFixed(1) : `${Math.round(ft)}`, W / 2, 84, head(64), INK)
-    text('ft to the cup', W / 2, 128, body(20, 500), QUIET)
+    const top = hud.scoreboard ? 36 : 0 // under the players' chips
+    text(ft < 10 ? ft.toFixed(1) : `${Math.round(ft)}`, W / 2, 84 + top, head(64), INK)
+    text('ft to the cup', W / 2, 128 + top, body(20, 500), QUIET)
   } else if (state.phase === 'flight' && state.shot?.pos) {
     const p = state.shot.pos
     const o = state.shot.from ?? { x: 0, z: 0 }
     const yd = Math.round(Math.hypot(p.x - o.x, p.z - o.z) / YD)
-    text(`${yd}`, W / 2, 84, head(64), INK)
-    text('yards', W / 2, 128, body(20, 500), QUIET)
+    const top = hud.scoreboard ? 36 : 0
+    text(`${yd}`, W / 2, 84 + top, head(64), INK)
+    text('yards', W / 2, 128 + top, body(20, 500), QUIET)
   }
   if (state.phase === 'result' && state.shot) state.shot.putt ? drawPuttReadout(state.shot) : drawReadout(state.shot)
   ctx.restore()
-  // The moment: one banner, said once, that pops in and fades.
-  if (state.banner) {
-    const t = state.banner.t
-    const pop = 1 + Math.max(0, 0.3 - t) * 1.8
-    const fade = clamp(1 - (t - 2.4) / 0.6, 0, 1)
-    if (fade > 0) {
-      ctx.save()
-      ctx.globalAlpha = fade
-      ctx.translate(W / 2, 236 + DY)
-      ctx.scale(pop, pop)
-      text(state.banner.text, 0, 0, head(state.banner.text.length > 10 ? 72 : 96), state.banner.color)
-      // Under it, the numbers that matter as chips (the carry in gold), or its one line.
-      const chips = state.banner.chips ?? (state.banner.sub ? [{ text: state.banner.sub }] : [])
-      const font = rubik(22 * Math.min(ts(), 1.2), 800)
-      ctx.font = font
-      const widths = chips.map((c) => ctx.measureText(c.text).width + 32)
-      let cx = -(widths.reduce((a, b) => a + b, 0) + 12 * (chips.length - 1)) / 2
-      chips.forEach((c, i) => {
-        panel(cx, 50, widths[i], 40, 16, c.gold ? GOLD : 'rgba(11,26,54,0.78)')
-        plain(c.text, cx + widths[i] / 2, 71, font, c.gold ? '#0b1a36' : INK)
-        cx += widths[i] + 12
-      })
-      ctx.restore()
-    }
-  }
+  // The moment: one ribbon, said once, that bounces in and fades.
+  if (state.banner) drawBanner(state.banner)
   if (state.mode === 'practice' && state.recent.length && state.phase !== 'flight') drawMap()
   if (isCourse() && state.phase !== 'flight') drawHoleMap(s)
   // Join with code: top right (the bottom left is the club card's).
   drawJoinBadge(ctx, party, W - 210 - (pointer ? 104 : 32), 32)
+}
+
+/** Along the top: a chip per player in their colour with their score, the one up raised and ringed. */
+function playerStrip(s) {
+  hud.scoreboard = true
+  const rs = Math.min(ts(), 1.2)
+  const seats = state.seats
+  const chips = seats.map((o) => {
+    const up = o === s
+    const r = Math.round((up ? 19 : 15) * rs)
+    const name = o.name.slice(0, 9)
+    const nameFont = rubik((up ? 19 : 16) * rs)
+    const scoreFont = rubik(14 * rs, 500)
+    ctx.font = nameFont
+    const tw = Math.max(ctx.measureText(name).width, (ctx.font = scoreFont, ctx.measureText(scoreText(o)).width))
+    return { o, up, r, name, nameFont, scoreFont, w: 8 + 2 * r + 10 + tw + 18, h: 2 * r + 14 }
+  })
+  const gap = 10
+  let x = W / 2 - (chips.reduce((a, c) => a + c.w, 0) + gap * (chips.length - 1)) / 2
+  hud.strip = chips.map((c) => c.name)
+  const b = state.banner
+  for (const c of chips) {
+    const y = 18 + (c.up ? 6 : 0)
+    panel(x, y + 5, c.w, c.h, c.h / 2, 'rgba(5,14,33,0.35)')
+    if (c.up) panel(x - 3, y - 3, c.w + 6, c.h + 6, c.h / 2 + 3, GOLD)
+    panel(x, y, c.w, c.h, c.h / 2, c.up ? 'rgba(15,33,71,0.95)' : 'rgba(15,33,71,0.78)')
+    dot(x + 8 + c.r, y + c.h / 2, c.r + 2, '#ffffff')
+    dot(x + 8 + c.r, y + c.h / 2, c.r, c.o.color)
+    plain(c.name[0].toUpperCase(), x + 8 + c.r, y + c.h / 2 + 2, lilita(c.r * 1.1), '#ffffff')
+    const tx = x + 8 + 2 * c.r + 10
+    plain(c.name, tx, y + c.h / 2 - 8 * rs, c.nameFont, connected(c.o) ? INK : QUIET, 'left')
+    plain(scoreText(c.o), tx, y + c.h / 2 + 11 * rs, c.scoreFont, c.up ? GOLD : QUIET, 'left')
+    // Points just won pop up beside the chip.
+    if (c.up && b?.points && b.t < 2.4) {
+      const pop = 1 + Math.max(0, 0.25 - b.t) * 2
+      ctx.save()
+      ctx.globalAlpha = clamp(1 - (b.t - 1.8) / 0.6, 0, 1)
+      ctx.translate(x + c.w + 30, y + c.h / 2 - Math.min(b.t, 0.4) * 20)
+      ctx.scale(pop, pop)
+      text(`+${b.points}`, 0, 2, lilita(30 * rs), LIME)
+      ctx.restore()
+    }
+    x += c.w + gap
+  }
+}
+
+/** A colour darker (k = 0..1 toward black), for a ribbon's shadow and tails. */
+function shade(hex, k) {
+  const n = parseInt(hex.slice(1), 16)
+  const ch = (v) => Math.round(v * (1 - k))
+  return `rgb(${ch(n >> 16)}, ${ch((n >> 8) & 255)}, ${ch(n & 255)})`
+}
+
+/** The moment: a ribbon in the shot's colour that bounces in, its numbers as chips under it, then fades. */
+function drawBanner(b) {
+  const t = b.t
+  const fade = clamp(1 - (t - 2.4) / 0.6, 0, 1)
+  if (fade <= 0) return
+  // A bounce: overshoot, settle.
+  const pop = t < 0.35 ? 0.6 + (t / 0.35) * 0.55 : 1 + Math.max(0, 0.15 - (t - 0.35)) * 1
+  const rs = Math.min(ts(), 1.2)
+  const size = (b.text.length > 10 ? 58 : 80) * rs
+  const font = lilita(size)
+  ctx.font = font
+  const tw = ctx.measureText(b.text).width
+  const rw = tw + 110
+  const rh = size * 1.18
+  const fill = b.color?.startsWith('#') ? b.color : GOLD
+  ctx.save()
+  ctx.globalAlpha = fade
+  ctx.translate(W / 2, 256 + DY)
+  ctx.scale(pop, pop)
+  hud.banner = b.text
+  ctx.save()
+  ctx.rotate(-0.045)
+  // The tails, folded behind.
+  ctx.fillStyle = shade(fill, 0.28)
+  for (const side of [-1, 1]) {
+    const ex = side * (rw / 2 + 36)
+    const ix = side * (rw / 2 - 14)
+    ctx.beginPath()
+    ctx.moveTo(ix, -rh * 0.28)
+    ctx.lineTo(ex, -rh * 0.28)
+    ctx.lineTo(ex - side * 18, rh * 0.06)
+    ctx.lineTo(ex, rh * 0.4)
+    ctx.lineTo(ix, rh * 0.4)
+    ctx.closePath()
+    ctx.fill()
+  }
+  panel(-rw / 2, -rh / 2 + 9, rw, rh, 20, shade(fill, 0.4))
+  panel(-rw / 2 - 4, -rh / 2 - 4, rw + 8, rh + 8, 23, '#ffffff')
+  panel(-rw / 2, -rh / 2, rw, rh, 20, fill)
+  ctx.textBaseline = 'middle'
+  ctx.lineJoin = 'round'
+  ctx.lineWidth = 9 * rs
+  ctx.strokeStyle = shade(fill, 0.62)
+  ctx.font = font
+  ctx.textAlign = 'center'
+  ctx.strokeText(b.text, 0, 4)
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText(b.text, 0, 4)
+  ctx.restore()
+  // Under it, the numbers that matter as chips (the carry in gold), or its one line.
+  const chips = b.chips ?? (b.sub ? [{ text: b.sub }] : [])
+  const cf = rubik(22 * rs, 800)
+  ctx.font = cf
+  const widths = chips.map((c) => ctx.measureText(c.text).width + 32)
+  let cx = -(widths.reduce((a, w) => a + w, 0) + 12 * (chips.length - 1)) / 2
+  const cy = rh / 2 + 22
+  chips.forEach((c, i) => {
+    panel(cx, cy + 4, widths[i], 42, 21, 'rgba(5,14,33,0.3)')
+    panel(cx, cy, widths[i], 42, 21, c.gold ? GOLD : 'rgba(15,33,71,0.92)')
+    plain(c.text, cx + widths[i] / 2, cy + 22, cf, c.gold ? '#0b1a36' : INK)
+    cx += widths[i] + 12
+  })
+  ctx.restore()
 }
 
 /** Top left: the hole (or ball) badge, when there's a hole, ball or stroke to count. */
@@ -1967,28 +2126,48 @@ function holeBadge(s) {
   if (isCourse()) [num, title, sub] = [String(state.hole + 1), `Par ${hole().par}`, s.done ? 'Holed' : `Stroke ${s.strokes + 1}`]
   else if (isPutts()) [num, title, sub] = [String(state.hole + 1), `Hole ${state.hole + 1} of ${PT.holes}`, s.done ? 'Holed' : `Putt ${s.strokes + 1}`]
   else if (isTargets()) {
-    const ball = Math.min(TUNING.targets.balls, s.shots.length + (state.phase === 'aim' || state.phase === 'meter' ? 1 : 0))
+    // The ball being played counts from the address until it's scored (finishShot records it).
+    const ball = Math.min(TUNING.targets.balls, s.shots.length + (state.phase === 'aim' || state.phase === 'meter' || state.phase === 'flight' ? 1 : 0))
     ;[num, title, sub] = [String(ball), `Ball ${ball} of ${TUNING.targets.balls}`, 'Target challenge']
   } else return
   hud.badge = title
+  // A navy card: the num in a gold disc, the title, and the line under it.
   const rs = Math.min(ts(), 1.2)
-  const titleFont = lilita(24 * rs)
+  const titleFont = lilita(28 * rs)
   const subFont = rubik(16 * rs)
   ctx.font = titleFont
   const tw = ctx.measureText(title).width
   ctx.font = subFont
   const sw = ctx.measureText(sub).width
   const r = Math.round(26 * rs)
-  const h = 2 * r + 20
-  const w = 10 + 2 * r + 14 + Math.max(tw, sw) + 22
-  panel(28, 24, w, h, h / 2, 'rgba(11,26,54,0.72)')
-  dot(38 + r, 24 + h / 2, r, GOLD)
-  plain(num, 38 + r, 24 + h / 2 + 2, lilita(30 * rs), '#0b1a36')
-  text(title, 38 + 2 * r + 14, 24 + h / 2 - 9 * rs, titleFont, INK, 'left')
-  text(sub, 38 + 2 * r + 14, 24 + h / 2 + 15 * rs, subFont, QUIET, 'left')
+  const h = 2 * r + 28
+  const w = 14 + 2 * r + 14 + Math.max(tw, sw) + 26
+  panel(28, 28, w, h, 22, 'rgba(5,14,33,0.35)')
+  panel(28, 22, w, h, 22, 'rgba(15,33,71,0.92)')
+  dot(42 + r, 22 + h / 2, r, GOLD)
+  plain(num, 42 + r, 22 + h / 2 + 2, lilita(30 * rs), '#0b1a36')
+  plain(title, 42 + 2 * r + 14, 22 + h / 2 - 10 * rs, titleFont, INK, 'left')
+  plain(sub, 42 + 2 * r + 14, 22 + h / 2 + 17 * rs, subFont, QUIET, 'left')
 }
 
-/** Bottom left: the club card: the club, how far it carries (or the putt's read), the aim when it's off the line. */
+/**
+ * The power the shot has so far, for the shot panel's arc: { v, mark } with v from 0 to
+ * TUNING.swing.maxPower (1 is a full swing), the phone's live backswing or the meter's.
+ */
+function shotPower(s) {
+  if (s.kind === 'phone') {
+    const inp = party.inputs[s.id] ?? {}
+    if (!inp.a) return { v: 0 }
+    const sw = party.public.swing ?? {}
+    const down = inp.swp === 'down' || inp.swp === 'done'
+    const v = clamp((Number(down ? inp.bk : inp.sw) || 0) / (sw.backFull || 200), 0, 1)
+    return { v, mark: isPutting() ? (party.views?.[s.id]?.puttMark ?? null) : null, live: true }
+  }
+  if (state.phase === 'meter' && state.meter) return { v: Math.max(0, state.meter.stage === 'power' ? state.meter.v : state.meter.power), live: true }
+  return { v: 0 }
+}
+
+/** Bottom right: the shot panel: the club, how far it carries (or the putt's read), the clubs as pips, and the power arc. */
 function clubCard(s) {
   const putting = isPutting()
   const club = CLUBS[s.club]
@@ -1999,7 +2178,7 @@ function clubCard(s) {
   const aimText = aim ? `aim ${Math.abs(aim)}° ${aim > 0 ? 'right' : 'left'}` : ''
   hud.club = `${short} ${name}`
   const rs = Math.min(ts(), 1.2)
-  const nameFont = rubik(22 * rs)
+  const nameFont = lilita(28 * rs)
   const lineFont = rubik(18 * rs)
   const aimFont = rubik(15 * rs, 500)
   ctx.font = nameFont
@@ -2007,22 +2186,62 @@ function clubCard(s) {
   ctx.font = lineFont
   tw = Math.max(tw, ctx.measureText(line).width)
   ctx.font = aimFont
-  tw = Math.max(tw, aimText ? ctx.measureText(aimText).width : 0)
-  const sq = Math.round(72 * rs)
-  const h = sq + 24
-  const w = 12 + sq + 14 + tw + 24
-  const x = 28
+  tw = Math.max(tw, aimText ? ctx.measureText(aimText).width : 0, putting ? 0 : CLUBS.length * 26)
+  const sq = Math.round(76 * rs)
+  const h = sq + 28
+  const arcW = Math.round(124 * rs)
+  const w = 14 + sq + 16 + tw + 14 + arcW + 10
+  const x = W - 28 - w
   // Above the touch buttons' row when there are touch buttons (layout()).
-  const y = (input.mode === 'touch' || input.mode === 'mouse') && s.kind !== 'phone' ? TOUCH.aimL.y - 40 - h : H - 28 - h
+  const y = (input.mode === 'touch' || input.mode === 'mouse') && s.kind !== 'phone' ? TOUCH.clubL.y - 40 - h : H - 28 - h
   hud.clubCard = { x, y, w, h }
-  panel(x, y, w, h, 22, 'rgba(11,26,54,0.78)')
-  panel(x + 12, y + 12, sq, sq, 16, INK)
-  plain(short, x + 12 + sq / 2, y + 12 + sq / 2 + 2, fitFont(lilita, 34 * rs, sq - 10, short), '#0b1a36')
-  const tx = x + 12 + sq + 14
-  const rows = aimText ? [-20, 4, 26] : [-12, 14]
-  text(name, tx, y + h / 2 + rows[0] * rs, nameFont, INK, 'left')
-  text(line, tx, y + h / 2 + rows[1] * rs, lineFont, GOLD, 'left')
-  if (aimText) text(aimText, tx, y + h / 2 + rows[2] * rs, aimFont, QUIET, 'left')
+  panel(x, y + 6, w, h, 24, 'rgba(5,14,33,0.35)')
+  panel(x, y, w, h, 24, 'rgba(15,33,71,0.92)')
+  panel(x + 14, y + 14, sq, sq, 18, INK)
+  plain(short, x + 14 + sq / 2, y + 14 + sq / 2 + 2, fitFont(lilita, 36 * rs, sq - 12, short), '#0b1a36')
+  const tx = x + 14 + sq + 16
+  plain(name, tx, y + h / 2 - 22 * rs, nameFont, INK, 'left')
+  plain(line, tx, y + h / 2 + 6 * rs, lineFont, GOLD, 'left')
+  if (aimText) plain(aimText, tx, y + h / 2 + 30 * rs, aimFont, QUIET, 'left')
+  else if (!putting) {
+    // Which club of the bag, as pips: the one in hand gold.
+    CLUBS.forEach((c, i) => panel(tx + i * 26, y + h / 2 + 26 * rs, 22, 8, 4, i === s.club ? GOLD : 'rgba(255,255,255,0.22)'))
+  }
+  // The power arc: a half ring that fills as the backswing (or the meter) builds power, lime at
+  // full, a white tick at full (and at the putt's pace mark with the help).
+  const p = shotPower(s)
+  const max = TUNING.swing.maxPower
+  const cx = x + w - 10 - arcW / 2
+  const cy = y + h / 2 + 22 * rs
+  const R = arcW / 2 - 12
+  hud.power = p.v
+  ctx.save()
+  ctx.lineCap = 'round'
+  ctx.lineWidth = 15 * rs
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'
+  ctx.beginPath()
+  ctx.arc(cx, cy, R, Math.PI, 0)
+  ctx.stroke()
+  if (p.v > 0.01) {
+    ctx.strokeStyle = p.v >= 0.98 && p.v <= 1.05 ? LIME : p.v > 1.05 ? PINK : GOLD
+    ctx.beginPath()
+    ctx.arc(cx, cy, R, Math.PI, Math.PI + Math.PI * Math.min(1, p.v / max))
+    ctx.stroke()
+  }
+  const tick = (k, color) => {
+    const a = Math.PI + Math.PI * Math.min(1, k / max)
+    ctx.strokeStyle = color
+    ctx.lineWidth = 4
+    ctx.beginPath()
+    ctx.moveTo(cx + Math.cos(a) * (R - 11 * rs), cy + Math.sin(a) * (R - 11 * rs))
+    ctx.lineTo(cx + Math.cos(a) * (R + 11 * rs), cy + Math.sin(a) * (R + 11 * rs))
+    ctx.stroke()
+  }
+  tick(1, INK)
+  if (p.mark != null) tick(Math.min(1, p.mark), LIME)
+  ctx.restore()
+  plain(p.live ? `${Math.round(p.v * 100)}%` : '—', cx, cy - 12 * rs, lilita(26 * rs), INK)
+  plain('POWER', cx, cy + 8 * rs, rubik(11 * rs, 500), QUIET)
 }
 
 /** A tag over the golfer's head: who's up. */
@@ -2171,10 +2390,11 @@ function wrap(str, x, y, width, font, color, draw = text, lh = 28) {
  * ball, between the club card and the scores. Called inside drawHud's DY shift; it sits on the real
  * bottom edge (above the touch buttons' row when there are touch buttons).
  */
+/** The how-to: a card over the shot panel, right-aligned with it (drawn in the DY-shifted space). */
 function hintPill(main, sub = '') {
   const rs = Math.min(ts(), 1.2)
-  const room = W - 2 * 330 // clear of the club card and the touch club buttons
-  const mainFont = fitFont((px) => rubik(px, 800), 22 * rs, room - 36, main)
+  const room = Math.min(W - 2 * 28, 760)
+  const mainFont = fitFont((px) => rubik(px, 800), 21 * rs, room - 36, main)
   const subFont = fitFont((px) => rubik(px, 500), 16 * rs, room - 36, sub)
   ctx.font = mainFont
   let w = ctx.measureText(main).width
@@ -2183,14 +2403,17 @@ function hintPill(main, sub = '') {
     w = Math.max(w, ctx.measureText(sub).width)
   }
   w += 36
-  const h = Math.round((sub ? 64 : 42) * rs)
-  const y = H - DY - 28 - h
-  hud.hintPill = { y, h, w }
-  panel(W / 2 - w / 2, y, w, h, Math.min(h / 2, 20), 'rgba(11,26,54,0.62)')
+  const h = Math.round((sub ? 64 : 44) * rs)
+  const above = hud.clubCard ? hud.clubCard.y - 12 : H - 28
+  const y = above - h - DY
+  const x = W - 28 - w
+  hud.hintPill = { x, y: y + DY, h, w }
+  panel(x, y + 4, w, h, 18, 'rgba(5,14,33,0.3)')
+  panel(x, y, w, h, 18, 'rgba(15,33,71,0.88)')
   if (sub) {
-    plain(main, W / 2, y + h / 2 - 11 * rs, mainFont, GOLD)
-    plain(sub, W / 2, y + h / 2 + 14 * rs, subFont, INK)
-  } else plain(main, W / 2, y + h / 2 + 1, mainFont, GOLD)
+    plain(main, x + 18, y + h / 2 - 11 * rs, mainFont, GOLD, 'left')
+    plain(sub, x + 18, y + h / 2 + 14 * rs, subFont, INK, 'left')
+  } else plain(main, x + 18, y + h / 2 + 1, mainFont, GOLD, 'left')
 }
 
 function drawAimHelp(s) {
@@ -2210,18 +2433,7 @@ function drawAimHelp(s) {
         st === 'touch' ? 'No motion sensors on this phone: the pad swings for you' : putting ? 'The backstroke sets how far it rolls' : 'Your backswing fills the bar; swing through to deliver it',
       )
     }
-    // The live swing: how far back, then the downswing.
-    if (inp.a) {
-      // The bar is the power the backswing has set; it holds through the downswing.
-      const sw = party.public.swing ?? {}
-      const down = inp.swp === 'down' || inp.swp === 'done'
-      const v = clamp((Number(down ? inp.bk : inp.sw) || 0) / (sw.backFull || 200), -0.2, 1)
-      panel(W / 2 - 180, 690, 360, 14, 7, 'rgba(11,26,54,0.7)')
-      panel(W / 2 - 180, 690, Math.max(14, 360 * Math.max(0, v)), 14, 7, inp.swp === 'down' ? PINK : GOLD)
-      // Putting with the help: the pace mark, as on the phone.
-      const mark = putting ? party.views?.[s.id]?.puttMark : null
-      if (mark) panel(W / 2 - 182 + 360 * Math.min(1, mark), 684, 5, 26, 2, INK)
-    }
+    // The live swing fills the shot panel's power arc (clubCard).
   } else if (state.phase === 'aim' && told) {
     hud.hint = true
     if (touchUi) hintPill(isPutting() ? 'Pull down on the green, then flick up to putt' : 'Pull down on the course, then flick up to swing', isPutting() ? 'A longer flick rolls it further' : 'Flick straight up for a straight shot')

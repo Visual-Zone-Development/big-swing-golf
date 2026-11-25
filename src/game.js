@@ -1,4 +1,4 @@
-// Seaside Swing: the TV runs everything. Players join from their phones (controller.html: the
+// Big Swing Golf: the TV runs everything. Players join from their phones (controller.html: the
 // phone is the club: pick a club, aim, hold SET and swing) or with controllers here; "Play on
 // this screen" is a solo game with this machine's own controls. Two places to play: the driving
 // range (Practice: hit as many as you like, see every number; the Target challenge: 10 balls each
@@ -106,7 +106,7 @@ save.data.hands ??= {} // player name → 'R' | 'L', picked on the phone
 save.data.courseBest ??= {} // player name → fewest strokes on the course's hole
 
 const party = createParty({ input, minPlayers: 1, maxPlayers: 4 })
-const lobby = createPartyLobby(party, input, { title: 'Seaside Swing', accent: GOLD, panel: 'rgba(11,26,54,0.86)' })
+const lobby = createPartyLobby(party, input, { title: 'Big Swing Golf', accent: GOLD, panel: 'rgba(11,26,54,0.86)' })
 const motion = createMotion(party)
 const phoneMenus = createPhoneMenus(party, input)
 
@@ -1325,8 +1325,8 @@ function drawTitle() {
     text('What are we', 34, 96 + DY, lilita(54), GOLD, 'left')
     text('playing?', 34, 156 + DY, lilita(54), LIME, 'left')
   } else {
-    text('Seaside', 34, 92 + DY, lilita(74), GOLD, 'left')
-    text('Swing', 34, 160 + DY, lilita(74), LIME, 'left')
+    text('Big Swing', 34, 92 + DY, lilita(74), GOLD, 'left')
+    text('Golf', 34, 160 + DY, lilita(74), LIME, 'left')
   }
   if (wardrobe) text('Wardrobe', RAIL.w - 34, 160 + DY, rubik(22 * rs), QUIET, 'right')
   // The tiles: menu.js handles the input; this draws them as the rail's tiles.

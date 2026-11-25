@@ -1,4 +1,4 @@
-# Seaside Swing: style
+# Big Swing Golf: style
 
 The look the art-direction, environments and lighting passes work to. The concept board (rounds 1 and 3) is the reference: a sunny ocean resort, saturated and soft, nothing boxy.
 

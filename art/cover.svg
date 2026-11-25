@@ -7,7 +7,7 @@
   </defs>
   <rect width="720" height="220" fill="url(#top)"/>
   <g font-family="Lilita One" text-anchor="middle" stroke="#0b1a36" stroke-width="14" stroke-linejoin="round" paint-order="stroke">
-    <text x="360" y="100" font-size="96" fill="#ffd23f">SEASIDE</text>
-    <text x="360" y="186" font-size="96" fill="#b6f04a">SWING</text>
+    <text x="360" y="100" font-size="96" fill="#ffd23f">BIG SWING</text>
+    <text x="360" y="186" font-size="96" fill="#b6f04a">GOLF</text>
   </g>
 </svg>

@@ -242,6 +242,7 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
    * o.flag: on the course, the pin to show from anywhere ({ cup: {x, z}, green })
    * o.targets: false hides the range's target greens (the course)
    * o.aim: degrees; o.ball: {x,y,z} | null; o.trail: points so far; o.ground: ground height under the ball
+   * o.club: the club in the golfer's hands (a CLUBS id; the putter on the green);
    * o.golfer: the look ({ id, color, outfit }) at the tee; o.waiting: the looks waiting beside it;
    * o.face: the golfer's expression (characters.js FACES); o.swing: the golfer's
    * pose (degrees: + back, - through); o.hand; o.lit: the green that was hit; o.land: where it landed; o.dt
@@ -332,7 +333,7 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
       const g = golfer(o.golfer)
       g.root.visible = true
       if (P) g.pose({ swing: o.swing ?? 0, aim: P.dir, hand: o.hand ?? 'R', dt: o.dt, face: o.face, gaze: watch, putt: true, base: { x: P.from.x, y: ph(P.from.x, P.from.z), z: -P.from.z } })
-      else g.pose({ swing: o.swing ?? 0, aim: aimRad, hand: o.hand ?? 'R', dt: o.dt, face: o.face, gaze: watch, base: o.tee ? { x: tee.x, y: teeY, z: -tee.z } : undefined })
+      else g.pose({ swing: o.swing ?? 0, aim: aimRad, hand: o.hand ?? 'R', club: o.club, dt: o.dt, face: o.face, gaze: watch, base: o.tee ? { x: tee.x, y: teeY, z: -tee.z } : undefined })
     }
     ;(o.waiting ?? []).slice(0, WAIT.length).forEach((def, i) => {
       const g = golfer(def)
@@ -564,6 +565,10 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
       golfer(def).react(kind)
     },
     /** What a look's bean is wearing and its face now (tests, debug). */
+    /** The club a golfer is holding (a CLUBS id or 'putter'), or null before they're drawn. */
+    clubOf(id) {
+      return golfers.get(id)?.club ?? null
+    },
     lookOf(id) {
       return golfers.get(id)?.look ?? null
     },

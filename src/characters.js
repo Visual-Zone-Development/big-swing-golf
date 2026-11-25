@@ -13,6 +13,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 
 import { BLINKS, drawFace, FACES, INK } from './beans/faces.js'
 import { reactionPose } from './reactions.js'
+import { makeClubSet } from './clubs.js'
 
 // ---- the bean's shape ------------------------------------------------------------------------
 
@@ -390,15 +391,8 @@ export function makeBean(def) {
   const ballAt = new THREE.Vector3(0, 0.05 - shoulder, -stand).sub(hands)
   const len = ballAt.length() - 0.05
   const dir = ballAt.clone().normalize()
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.021, len, 8), new THREE.MeshStandardMaterial({ color: '#d9dee8', metalness: 0.5, roughness: 0.3 }))
-  shaft.position.copy(dir).multiplyScalar(len / 2)
-  shaft.quaternion.setFromUnitVectors(up, dir)
-  wrist.add(shaft)
-  const head = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.12, 4, 10), new THREE.MeshStandardMaterial({ color: '#3a3f5c', metalness: 0.4, roughness: 0.35 }))
-  head.position.copy(dir).multiplyScalar(len)
-  head.rotation.z = Math.PI / 2
-  head.castShadow = true
-  wrist.add(head)
+  const clubs = makeClubSet({ color: def.color, len, dir, butt: 0.06 })
+  wrist.add(clubs.root)
 
   let angle = 0
   let t = Math.random() * 10
@@ -435,6 +429,10 @@ export function makeBean(def) {
 
   return {
     root,
+    /** The club in the hands (a CLUBS id or 'putter'). */
+    get club() {
+      return clubs.club
+    },
     def,
     stand,
     dress,
@@ -479,6 +477,7 @@ export function makeBean(def) {
       const d = Math.max(-200, Math.min(270, angle))
       swing.rotation.z = THREE.MathUtils.degToRad(d * 0.6) * m
       wrist.rotation.z = o.putt ? 0 : THREE.MathUtils.degToRad(Math.max(-60, Math.min(95, d * 0.35))) * m
+      clubs.show(o.putt ? 'putter' : o.club, o.hand)
       shape.rotation.y = THREE.MathUtils.degToRad(d * 0.12) * m
       // Idle: breathing squash, blinking; reactions on top.
       let sy = 1 + Math.sin(t * 2.4) * 0.02
@@ -538,16 +537,8 @@ export function makeModelBean(kit, def) {
   const ballAt = new THREE.Vector3(0, 0.05 - shoulder, -stand).sub(hands)
   const len = ballAt.length() - 0.05
   const dir = ballAt.clone().normalize()
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.021, len + 0.12, 8), new THREE.MeshStandardMaterial({ color: '#d9dee8', metalness: 0.5, roughness: 0.3 }))
-  shaft.position.copy(dir).multiplyScalar((len - 0.12) / 2)
-  shaft.quaternion.setFromUnitVectors(up, dir)
-  shaft.castShadow = true
-  wrist.add(shaft)
-  const head = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.12, 4, 10), new THREE.MeshStandardMaterial({ color: '#3a3f5c', metalness: 0.4, roughness: 0.35 }))
-  head.position.copy(dir).multiplyScalar(len)
-  head.rotation.z = Math.PI / 2
-  head.castShadow = true
-  wrist.add(head)
+  const clubs = makeClubSet({ color: def.color, len, dir })
+  wrist.add(clubs.root)
   // Where the two gloves hold the grip: one above the other along the shaft.
   const gripTop = new THREE.Object3D()
   gripTop.position.copy(dir).multiplyScalar(-0.05)
@@ -565,6 +556,10 @@ export function makeModelBean(kit, def) {
 
   return {
     root,
+    /** The club in the hands (a CLUBS id or 'putter'). */
+    get club() {
+      return clubs.club
+    },
     def,
     stand,
     model: true,
@@ -595,6 +590,7 @@ export function makeModelBean(kit, def) {
       const d = Math.max(-200, Math.min(270, angle))
       swing.rotation.z = THREE.MathUtils.degToRad(d * 0.6) * m
       wrist.rotation.z = o.putt ? 0 : THREE.MathUtils.degToRad(Math.max(-60, Math.min(95, d * 0.35))) * m
+      clubs.show(o.putt ? 'putter' : o.club, o.hand)
       shape.rotation.y = THREE.MathUtils.degToRad(d * 0.12) * m
       // Waiting beans (no club) let their arms hang; the golfer up holds the grip.
       const holding = !o.at

@@ -1252,6 +1252,7 @@ function draw(dt) {
     trail: sh ? pts.slice(0, sh.trailN ?? 0).concat(sh.pos ? [{ ...sh.pos }] : []) : [],
     trailColor: s?.color,
     golfer: inGame && s ? s.look : null,
+    club: s ? CLUBS[s.club]?.id : null,
     face: inGame && s ? faceOf(s) : 'smug',
     // The title: the crew lined up beside the rail, smiling at the camera.
     waiting: inGame ? state.seats.filter((o) => o !== s && connected(o)).map((o) => o.look) : TITLE_CREW.map((l, i) => ({ ...l, face: TITLE_FACES[i] })),

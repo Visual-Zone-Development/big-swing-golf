@@ -473,6 +473,18 @@ test('the title rail has a Wardrobe: playing on this screen, the bean wears what
   await t.page.close()
 })
 
+test('the golfer holds the club that is picked: the driver, then a wedge from the phone', async () => {
+  const t = await tv()
+  await startParty(t, [['p1', 'Ada']])
+  const held = () => t.state(() => window.__game.view.clubOf(window.__game.state.seats[0].look.id))
+  await t.page.waitForFunction(() => window.__game.view.clubOf(window.__game.state.seats[0].look.id) === 'dr')
+  t.say('p1', { club: 6 }) // the sand wedge
+  await t.page.waitForFunction(() => window.__game.view.clubOf(window.__game.state.seats[0].look.id) === 'sw')
+  assert.equal(await held(), 'sw')
+  assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
 test('inside the launcher the title rail ends with Quit to library, and choosing it goes back to the games', async () => {
   const t = await tv({ launcher: true })
   assert.deepEqual(await t.state(() => window.__game.titleMenu.items.map((i) => i.id)), ['party', 'solo', 'wardrobe', 'settings', 'quit-to-library'])

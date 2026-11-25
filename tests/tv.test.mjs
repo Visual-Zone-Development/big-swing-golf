@@ -2,6 +2,7 @@
 // joining and sending what controller.html sends ({ club }, { shot }). The game is built with
 // vite (as the build does) into a temp folder and served from there.
 // Run: node --test games/big-swing-golf/tests/
+import { distToLine, FAIRWAY_HALF, HOLES } from '../src/course.js'
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -605,7 +606,10 @@ test('the course: two phones tee off in turn, the farthest from the pin plays ne
   await t.page.waitForFunction(() => window.__game.state.phase === 'result', null, { timeout: 15000 })
   const ada = await t.state(() => window.__game.state.seats[0])
   assert.equal(ada.strokes, 1)
-  assert.ok(ada.ball.z > 150, `Ada's drive stopped ${Math.round(ada.ball.z)} m out`)
+  // Aimed down the fairway round the bend (not at the pin): a full square drive finds it.
+  const out = Math.hypot(ada.ball.x - HOLES[0].tee.x, ada.ball.z - HOLES[0].tee.z)
+  assert.ok(out > 150, `Ada's drive stopped ${Math.round(out)} m from the tee`)
+  assert.ok(distToLine(ada.ball.x, ada.ball.z, HOLES[0].fairway) < FAIRWAY_HALF, `on the fairway: ${Math.round(ada.ball.x)}, ${Math.round(ada.ball.z)}`)
   // No marker left where it stopped: the next shot is played from there, the camera right beside it.
   assert.equal(await t.state(() => window.__game.view.markCount), 0)
   await next()
@@ -643,8 +647,9 @@ test('the course: two phones tee off in turn, the farthest from the pin plays ne
   assert.equal(await t.state(() => window.__game.state.banner?.text), 'Hole 2')
   assert.match(await t.state(() => window.__game.state.banner?.sub), /^Beach Hut Bay · par 3 · \d+ yd$/)
   let seats = await t.state(() => window.__game.state.seats.map((s) => ({ strokes: s.strokes, done: s.done, card: s.card, ball: s.ball, cup: s.cup })))
+  seats = seats.map((s) => ({ ...s }))
   assert.equal(seats[0].card[0], 2) // a drive and a putt
-  assert.ok(seats.every((s) => s.strokes === 0 && !s.done && s.ball.x === -26 && s.cup.x === 42), 'both on the second tee, playing to its pin')
+  assert.ok(seats.every((s) => s.strokes === 0 && !s.done && s.ball.x === HOLES[1].tee.x && s.cup.x === HOLES[1].cup.x), 'both on the second tee, playing to its pin')
   assert.match(await t.state(() => window.__game.party.public.ballsLeft), /^Hole 2 of 3 · Beach Hut Bay · par 3/)
   assert.equal(await t.state(() => window.__game.party.public.turn), 'p1')
   // Holes two and three: both placed by the pin, each holes out with one putt.
@@ -674,6 +679,35 @@ test('the course: two phones tee off in turn, the farthest from the pin plays ne
   assert.equal(await t.state(() => window.__game.party.public.cards[0].score), '4 ✓')
   assert.equal(await t.state(() => JSON.parse(localStorage.getItem('big-swing-golf-save-v1')).roundBest.Ada), 4)
   assert.equal(await t.state(() => window.__game.party.public.menu?.title), 'Round over')
+  assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
+test('the course: from a bunker the game takes more club and a full swing goes about two-thirds as far', async () => {
+  const t = await tv()
+  await chooseMode(t, 4) // the course
+  await startParty(t, [['p1', 'Ada']])
+  const place = (ball, hole = 0) =>
+    t.page.evaluate(
+      ([ball, cup, hole]) => {
+        const g = window.__game.state
+        g.hole = hole
+        Object.assign(g.seats[0], { ball, cup, strokes: 1, done: false })
+        g.resultTime = 99
+        g.phase = 'result'
+      },
+      [ball, HOLES[hole].cup, hole]
+    )
+  // In the first hole's fairway bunker, about 165 yards out: more club than the 5 iron it would be from grass.
+  const trap = HOLES[0].sand[0]
+  await place({ x: trap.x, z: trap.z })
+  await t.page.waitForFunction(() => window.__game.state.phase === 'aim' && window.__game.state.seats[0].strokes === 1)
+  const club = await t.state(() => window.__game.state.seats[0].club)
+  assert.ok(club <= 1, `club ${club}: a wood out of the sand`)
+  t.say('p1', { shot: SQUARE })
+  await t.page.waitForFunction(() => window.__game.state.shot?.result, null, { timeout: 5000 })
+  const shot = await t.state(() => ({ carry: window.__game.state.shot.result.carry, club: window.__game.state.shot.club.carry }))
+  assert.ok(shot.carry > shot.club * 0.55 && shot.carry < shot.club * 0.78, `carried ${shot.carry} yd with a ${shot.club} yd club`)
   assert.deepEqual(t.errors, [])
   await t.page.close()
 })

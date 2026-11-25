@@ -8,8 +8,9 @@ import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import { TUNING, YD } from './tuning.js'
-import { fairwayHalf, groundHeight, landHeight, SEA_LEVEL, surfaceAt } from './terrain.js'
-import { HOLES } from './course.js'
+import { fairwayHalf, groundHeight, landHeight, lieAt, SEA_LEVEL, surfaceAt } from './terrain.js'
+import { APRON, FAIRWAY_HALF, ellipseReach, HOLES } from './course.js'
+import { COAST, HILLS, shoreDistance } from './links.js'
 import { GREEN, greenReach, puttHeight, slopeAt } from './putting.js'
 import { createTufts, grassMaterial, grassUVs, setGrassDetail } from './grass.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
@@ -78,36 +79,10 @@ export function createScenery(scene) {
   scene.fog = new THREE.Fog(COLORS.skyHorizon, 150, 950)
 
   // ---- land --------------------------------------------------------------------------------------
-  // One mesh from 60 m behind the tee to well past the beach, coloured by what it is.
-  const land = new THREE.PlaneGeometry(820, 820, 110, 110)
-  land.rotateX(-Math.PI / 2) // now x right, y up, z toward the camera (three space)
-  const pos = land.attributes.position
-  const colors = new Float32Array(pos.count * 3)
-  const c = new THREE.Color()
-  const lo = new THREE.Color(COLORS.hillLow)
-  const hi = new THREE.Color(COLORS.hillHigh)
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i)
-    const z = -(pos.getZ(i) - 350) // game z: from -60 (behind the tee) to 760
-    pos.setZ(i, -z)
-    const h = landHeight(x, z)
-    pos.setY(i, h)
-    const s = surfaceAt(x, z)
-    if (s === 'range') c.set(COLORS.rough)
-    else if (s === 'hill') c.copy(lo).lerp(hi, Math.min(1, Math.max(0, h / 22)))
-    else if (h > SEA_LEVEL + 0.35) c.set(h < SEA_LEVEL + 0.9 ? COLORS.wetSand : COLORS.sand)
-    else if (h > SEA_LEVEL - 0.05) c.set(COLORS.foam)
-    else c.set(COLORS.seabed).lerp(new THREE.Color(COLORS.sea), Math.min(1, (SEA_LEVEL - h) / 3))
-    // A little variation so big areas don't look flat.
-    const n = 1 + 0.04 * Math.sin(x * 0.31) * Math.sin(z * 0.27)
-    colors.set([c.r * n, c.g * n, c.b * n], i * 3)
-  }
-  land.setAttribute('color', new THREE.BufferAttribute(colors, 3))
-  land.computeVertexNormals()
-  grassUVs(land)
-  const ground = new THREE.Mesh(land, grassMaterial({ vertexColors: true, patch: 0.26 }))
-  ground.receiveShadow = true
-  scene.add(ground)
+  // The range: one mesh from 60 m behind the tee to well past the beach, coloured by what it is.
+  // The course, south of it: another, a little finer (its coast has a bay and a headland).
+  scene.add(landMesh(820, 820, 110, 110, 0, 350))
+  scene.add(landMesh(1000, 762, 200, 152, 0, -439))
 
   // The fairway: a fan, mown in stripes every 10 yards, rounded at both ends.
   const fw = new THREE.Shape()
@@ -238,13 +213,16 @@ export function createScenery(scene) {
 
   addClouds(scene)
 
+  // ---- the course: its fairways, traps, trees and buildings -----------------------------------------
+  courseScenery(scene)
+
   // ---- the tee ---------------------------------------------------------------------------------
-  // One at every hole's tee: a rounded mown box, a tee peg and two big glossy ball markers. The
-  // first is the range's tee too.
+  // One at the range's tee and at every hole's: a rounded mown box, a tee peg and two big glossy
+  // ball markers.
   const teeGeo = grassUVs(new THREE.LatheGeometry([[0, 0.07], [2.55, 0.07], [2.75, 0.04], [2.85, -0.02], [2.9, -0.06]].map(([x, y]) => new THREE.Vector2(x, y)), 40))
   const teeMat = grassMaterial({ color: COLORS.tee, stripes: true, stripe: 0.9, stripeAngle: Math.PI / 2, patch: 0.05, bump: 0.5, side: THREE.DoubleSide })
   const pegMat = new THREE.MeshStandardMaterial({ color: '#ffd23f' })
-  for (const { tee: at, cup } of HOLES) {
+  for (const { tee: at, cup } of [{ tee: { x: 0, z: 0 }, cup: { x: 0, z: 100 } }, ...HOLES]) {
     // Turned to face its pin (three.js puts game z at -z).
     const box = new THREE.Group()
     box.position.set(at.x, 0, -at.z)
@@ -311,7 +289,7 @@ export function createScenery(scene) {
   const tuftItems = []
   const roughTones = ['#74c04a', '#82c955', '#6bb543', '#8dd05c', '#99d866']
   // No tufts on the course's greens or their fringes, or on a tee box.
-  const mown = (x, z) => HOLES.some((h) => greenReach(x, z, h.green) < 1 + h.green.fringe * 1.05 || Math.hypot(x - h.tee.x, z - h.tee.z) < 3.6)
+  const mown = (x, z) => HOLES.some((h) => greenReach(x, z, h.green) < 1 + h.green.fringe * 1.05 || Math.hypot(x - h.tee.x, z - h.tee.z) < 3.6 || [...h.sand, ...h.water].some((e) => ellipseReach(x, z, e) < 1.12))
   const tuft = (x, z, s = 1, tones = roughTones) => !mown(x, z) && tuftItems.push({ x, z, y: groundHeight(x, z), s: s * (0.75 + tuftRand() * 0.6), r: tuftRand() * Math.PI, color: tones[Math.floor(tuftRand() * tones.length)] })
   // The rough either side of the fairway, thick near the tee and thinning out downrange.
   for (let i = 0; i < 2600; i++) {
@@ -376,7 +354,6 @@ export function createScenery(scene) {
     setTargets(on) {
       greens.visible = on
       yardLines.visible = on
-      boards.visible = on
     },
     /** Light mode (slow machines): drop the small stuff nobody misses. */
     setLight(light) {
@@ -411,6 +388,191 @@ export function createScenery(scene) {
 }
 
 // ---- pieces ----------------------------------------------------------------------------------------
+
+/**
+ * A big piece of ground, w × d metres centred on game (cx, cz), coloured by what it is: grass,
+ * the hills by their height, sand, the wet edge, and the seabed fading into the sea's blue.
+ */
+function landMesh(w, d, sw, sd, cx, cz) {
+  const land = new THREE.PlaneGeometry(w, d, sw, sd)
+  land.rotateX(-Math.PI / 2) // now x right, y up, z toward the camera (three space)
+  const pos = land.attributes.position
+  const colors = new Float32Array(pos.count * 3)
+  const c = new THREE.Color()
+  const lo = new THREE.Color(COLORS.hillLow)
+  const hi = new THREE.Color(COLORS.hillHigh)
+  const deep = new THREE.Color(COLORS.sea)
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i) + cx
+    const z = cz - pos.getZ(i)
+    pos.setX(i, x)
+    pos.setZ(i, -z)
+    const h = landHeight(x, z)
+    pos.setY(i, h)
+    const s = surfaceAt(x, z)
+    if (s === 'range') c.set(COLORS.rough)
+    else if (s === 'hill') c.copy(lo).lerp(hi, Math.min(1, Math.max(0, h / 22)))
+    else if (h > SEA_LEVEL + 0.35) c.set(h < SEA_LEVEL + 0.9 ? COLORS.wetSand : COLORS.sand)
+    else if (h > SEA_LEVEL - 0.05) c.set(COLORS.foam)
+    else c.set(COLORS.seabed).lerp(deep, Math.min(1, (SEA_LEVEL - h) / 3))
+    // A little variation so big areas don't look flat.
+    const n = 1 + 0.04 * Math.sin(x * 0.31) * Math.sin(z * 0.27)
+    colors.set([c.r * n, c.g * n, c.b * n], i * 3)
+  }
+  land.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+  land.computeVertexNormals()
+  grassUVs(land)
+  const ground = new THREE.Mesh(land, grassMaterial({ vertexColors: true, patch: 0.26 }))
+  ground.receiveShadow = true
+  return ground
+}
+
+/** A flat ellipse lying on the ground at height y (game space; rot in degrees, +x toward +z). */
+function groundEllipse(e, y, grow = 0, segments = 40) {
+  const g = new THREE.CircleGeometry(1, segments).rotateX(-Math.PI / 2)
+  g.scale(e.rx + grow, 1, e.rz + grow)
+  g.rotateY(((e.rot ?? 0) * Math.PI) / 180)
+  return g.translate(e.x, y, -e.z)
+}
+
+/**
+ * The course's own scenery, on its ground south of the range (links.js): mown fairways and
+ * aprons, bunkers and beaches, the pond, trees on the hills and down the third hole's valley,
+ * palms along the shore, the lighthouse on the headland and the clubhouse.
+ */
+function courseScenery(scene) {
+  const rand = rng(53)
+  // Fairways: a ribbon along each hole's line, round at the ends and the bend; an apron round each green.
+  const mownParts = []
+  for (const h of HOLES) {
+    for (let i = 0; i + 1 < h.fairway.length; i++) {
+      const a = h.fairway[i]
+      const b = h.fairway[i + 1]
+      const len = Math.hypot(b.x - a.x, b.z - a.z)
+      const strip = new THREE.PlaneGeometry(FAIRWAY_HALF * 2, len).rotateX(-Math.PI / 2)
+      // The strip runs along three −z (game +z); turn it onto the line from a to b.
+      strip.rotateY(-Math.atan2(b.x - a.x, b.z - a.z))
+      mownParts.push(strip.translate((a.x + b.x) / 2, 0.012, -(a.z + b.z) / 2))
+    }
+    for (const p of h.fairway) mownParts.push(groundEllipse({ x: p.x, z: p.z, rx: FAIRWAY_HALF, rz: FAIRWAY_HALF }, 0.012))
+    mownParts.push(groundEllipse({ x: h.green.x, z: h.green.z, rx: h.green.rx * APRON, rz: h.green.rz * APRON }, 0.012))
+  }
+  const mownGeo = mergeGeometries(mownParts.map((g) => g.toNonIndexed()))
+  grassUVs(mownGeo)
+  const mown = new THREE.Mesh(mownGeo, grassMaterial({ color: COLORS.fairway, stripes: true, stripe: 9, patch: 0.14, bump: 0.6 }))
+  mown.receiveShadow = true
+  scene.add(mown)
+
+  // Sand: a darker lip under each trap, the sand on top.
+  const sandParts = []
+  const lipParts = []
+  const waterParts = []
+  const bankParts = []
+  for (const h of HOLES) {
+    for (const e of h.sand) {
+      lipParts.push(groundEllipse(e, 0.02, 0.7))
+      sandParts.push(groundEllipse(e, 0.035))
+    }
+    for (const e of h.water) {
+      bankParts.push(groundEllipse(e, 0.02, 1.1))
+      waterParts.push(groundEllipse(e, 0.04, -0.4))
+    }
+  }
+  const flat = (parts, mat) => {
+    if (!parts.length) return
+    const m = new THREE.Mesh(mergeGeometries(parts.map((g) => g.toNonIndexed())), mat)
+    m.receiveShadow = true
+    scene.add(m)
+  }
+  flat(lipParts, new THREE.MeshStandardMaterial({ color: '#d9bf7a', roughness: 1 }))
+  flat(sandParts, new THREE.MeshStandardMaterial({ color: COLORS.sand, roughness: 1 }))
+  flat(bankParts, new THREE.MeshStandardMaterial({ color: '#3d8f3a', roughness: 1 }))
+  flat(waterParts, new THREE.MeshStandardMaterial({ color: COLORS.sea, roughness: 0.12, metalness: 0.05 }))
+
+  // Trees: thick on the hills, a loose line down each side of the third hole's valley, a few
+  // elsewhere. Palms along the shore. Nothing on the mown ground or in a trap.
+  const clear = (x, z, room) => ['rough', 'hill'].includes(lieAt(x, z)) && HOLES.every((h) => greenReach(x, z, h.green) > APRON + 0.5 && Math.hypot(x - h.tee.x, z - h.tee.z) > room && [...h.sand, ...h.water].every((e) => ellipseReach(x, z, e) > 1.5))
+  const trees = []
+  const palms = []
+  const bushes = []
+  for (const m of HILLS) {
+    const n = Math.round((m.rx * m.rz) / 120)
+    for (let i = 0; i < n; i++) {
+      const a = rand() * Math.PI * 2
+      const r = Math.sqrt(rand()) * 0.95
+      const [x, z] = [m.x + Math.cos(a) * m.rx * r, m.z + Math.sin(a) * m.rz * r]
+      if (clear(x, z, 9)) trees.push([x, z, 0.9 + rand() * 0.7])
+    }
+  }
+  const third = HOLES[2].fairway
+  for (let i = 0; i + 1 < third.length; i++) {
+    const a = third[i]
+    const b = third[i + 1]
+    const len = Math.hypot(b.x - a.x, b.z - a.z)
+    const [nx, nz] = [(b.z - a.z) / len, -(b.x - a.x) / len]
+    for (let d = 8; d < len; d += 13) {
+      for (const side of [-1, 1]) {
+        const off = side * (FAIRWAY_HALF + 6 + rand() * 7)
+        const [x, z] = [a.x + ((b.x - a.x) * d) / len + nx * off, a.z + ((b.z - a.z) * d) / len + nz * off]
+        if (clear(x, z, 9)) trees.push([x, z, 1 + rand() * 0.5])
+        if (rand() < 0.5 && clear(x + nx * side * 5, z + nz * side * 5, 9)) bushes.push([x + nx * side * 5, z + nz * side * 5, 0.8 + rand() * 0.6])
+      }
+    }
+  }
+  // Far hills to the west and south: scattered trees closing the view.
+  for (let i = 0; i < 160; i++) {
+    const [x, z] = [-520 + rand() * 520, -760 + rand() * 660]
+    if ((x < -240 || z < -480) && clear(x, z, 9) && shoreDistance(x, z) > 30) trees.push([x, z, 0.9 + rand() * 0.8])
+  }
+  // Palms a little inland of the shore, from the range's end of the bay round the headland and down the cliff.
+  for (let i = 0; i + 1 < COAST.length - 2; i++) {
+    const [ax, az] = COAST[i]
+    const [bx, bz] = COAST[i + 1]
+    const len = Math.hypot(bx - ax, bz - az)
+    for (let d = rand() * 14; d < len; d += 14 + rand() * 16) {
+      // Inland is to the right of the shore's direction (north to south, land to the west).
+      const off = 12 + rand() * 9
+      const [x, z] = [ax + ((bx - ax) * d) / len + ((bz - az) / len) * off, az + ((bz - az) * d) / len - ((bx - ax) / len) * off]
+      if (shoreDistance(x, z) > 9 && clear(x, z, 9)) palms.push([x, z, 0.85 + rand() * 0.35, rand() * Math.PI * 2])
+    }
+  }
+  for (const mesh of [
+    instance(scene, treeGeometry(), trees.map(([x, z, sc]) => ({ x, z, s: sc, r: rand() * 6 })), ['#ffffff', '#e9ffd9', '#fff4d6', '#dff7ff']),
+    instance(scene, palmGeometry(), palms.map(([x, z, sc, r]) => ({ x, z, s: sc, r })), ['#ffffff', '#f2ffe6']),
+    instance(scene, bushGeometry(), bushes.map(([x, z, sc]) => ({ x, z, s: sc, r: rand() * 6 })), ['#ffffff', '#e8ffe0', '#f0ffd0'])
+  ]) {
+    mesh.castShadow = true
+  }
+
+  // The lighthouse on the headland's tip, on a low rocky base.
+  const tip = new THREE.Group()
+  tip.position.set(203, 0, 236)
+  tip.add(merged([[0, 0, 0, 7], [5, -0.4, 3, 4.5], [-4, -0.4, -3, 5]].map(([x, y, z, r]) => [at(new THREE.SphereGeometry(1, 14, 10), x, y, z, r, r * 0.3, r), '#b9a48f'])))
+  const lh = lighthouse()
+  lh.position.y = 1.6
+  tip.add(lh)
+  scene.add(tip)
+
+  // The clubhouse, south-west of the first tee: cream walls, a terracotta roof, a veranda.
+  const house = new THREE.Group()
+  house.position.set(-140, 0, 398)
+  house.rotation.y = -0.5
+  house.add(
+    merged([
+      [new THREE.BoxGeometry(20, 5, 11).translate(0, 2.5, 0), '#fff4dc'],
+      [new THREE.CylinderGeometry(0.1, 9.2, 5, 4, 1).rotateY(Math.PI / 4).scale(1.75, 1, 1).translate(0, 7.4, 0), '#e8703f'],
+      [new THREE.BoxGeometry(22, 0.35, 4).translate(0, 3.6, 7.2), '#e8703f'],
+      ...[-9, -3, 3, 9].map((x) => [new THREE.CylinderGeometry(0.22, 0.22, 3.6, 8).translate(x, 1.8, 8.8), '#fff8ec']),
+      [new THREE.BoxGeometry(2.2, 3.4, 0.2).translate(0, 1.7, 5.6), '#2a6fb0'],
+      ...[-6.5, 6.5].map((x) => [new THREE.BoxGeometry(3, 1.8, 0.2).translate(x, 2.9, 5.6), '#9fd8ff'])
+    ])
+  )
+  house.traverse((o) => {
+    o.castShadow = true
+    o.receiveShadow = true
+  })
+  scene.add(house)
+}
 
 /**
  * The putting green (putting.js has its shape): mown stripes, lighter where it's higher, a darker
@@ -689,6 +851,12 @@ function addClouds(scene) {
 // ---- the resort's props (shared/resort: Meshy models) --------------------------------------------
 
 /** Where the beach huts stand (game space): on the dunes along the right, facing the range. */
+/** The huts behind the course's second green: [x, z, turn (radians: 0 faces three +z, game −z)]. */
+const COURSE_HUTS = [
+  [10, -128, 0.25],
+  [22, -124, 0],
+  [34, -125, -0.25]
+]
 const HUT_COLORS = ['#3fcfa6', '#ff8a9a', '#ffd25c', '#6cc3ff', '#b79cff']
 /**
  * Load the resort's props and put them in the scene: a row of beach huts on the dunes (one model,
@@ -713,6 +881,19 @@ export async function addProps(scene, base) {
     holder.scale.setScalar(hutScale)
     holder.position.set(x, groundHeight(x, z) - 0.05, -z)
     holder.rotation.y = -Math.PI / 2 + (i % 2 ? 0.08 : -0.08)
+    h.castShadow = true
+    h.receiveShadow = true
+    group.add(holder)
+  }
+  // And three behind the second hole's green on the course, facing it across the beach.
+  for (const [x, z, turn] of COURSE_HUTS) {
+    const h = hutMesh.clone()
+    h.material = hueShifted(hutMesh.material, 160 / 360, HUT_COLORS[i++ % HUT_COLORS.length])
+    const holder = new THREE.Group()
+    holder.add(h)
+    holder.scale.setScalar(hutScale)
+    holder.position.set(x, groundHeight(x, z) - 0.05, -z)
+    holder.rotation.y = turn
     h.castShadow = true
     h.receiveShadow = true
     group.add(holder)

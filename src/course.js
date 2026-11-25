@@ -1,85 +1,145 @@
-// The course: three holes at the seaside resort, played as real golf: everyone tees off, then
-// whoever is farthest from the pin plays next, until all have holed out; then on to the next tee.
-// Fewest strokes over the round wins. Plain numbers and rules only (no drawing), so it can be tested.
+// The course: three holes on their own ground south of the driving range, played as real golf:
+// everyone tees off, then whoever is farthest from the pin plays next, until all have holed out;
+// then on to the next tee. Fewest strokes over the round wins. Plain numbers and rules only (no
+// drawing), so it can be tested. The ground itself (coast, hills) is links.js.
 //
-// Game space as everywhere: x right of the first tee, z downrange, metres.
+// Game space as everywhere: x right of the range's tee, z downrange, metres. The course lies
+// behind the range (z below −100): the sea to the east, the hills to the west.
 import { YD } from './tuning.js'
 
 /**
- * The holes, in the order they're played. Each has its own tee and its own green on the range's
- * flat ground. A green is described like the practice green (green.js): a centre, half-widths, a
- * fringe, a base height, a tilt (rise per metre right, and downrange) and soft humps.
+ * The holes, in the order they're played: a loop out from the clubhouse and back.
+ *   tee, cup: {x, z}
+ *   green: described like the practice green (green.js): a centre, half-widths, a fringe, a base
+ *     height, a tilt (rise per metre along +x, and along +z) and soft humps
+ *   fairway: the mown line from the tee to the green, as points (a par 3 has none: its green has
+ *     an apron); `via` is where the tee shot is aimed, and clubbed for, on a hole that bends
+ *   sand: bunkers and beaches, ellipses { x, z, rx, rz, rot (degrees, +x toward +z) }
+ *   water: ponds, ellipses the same way (the sea is links.js's coast)
  */
 export const HOLES = [
   {
-    // Straight down the range to the far end, just short of the dunes, the lighthouse behind.
+    // Along the clifftop out to the headland, bending right, the sea all down the right and the
+    // lighthouse behind the green.
     name: 'Lighthouse Point',
     par: 4,
-    tee: { x: 0, z: 0 },
+    tee: { x: -95, z: -366 },
+    via: { x: 112, z: -267 }, // where a full drive comes down, round the bend
+    fairway: [{ x: -95, z: -366 }, { x: 23, z: -298 }, { x: 151, z: -253 }],
     green: {
-      x: -12,
-      z: 260,
+      x: 151,
+      z: -253,
+      rx: 13.5,
+      rz: 12,
+      fringe: 0.22,
+      base: 0.3,
+      tilt: [-0.012, -0.01], // falls toward the sea, to the east and south
+      bumps: [
+        { x: -5, z: 3, h: 0.14, r: 3 }, // a shoulder on the way in
+        { x: 4, z: -4, h: -0.1, r: 3.2 } // a hollow by the cliff
+      ]
+    },
+    cup: { x: 154, z: -251 },
+    sand: [
+      { x: 5, z: -277, rx: 13.5, rz: 7, rot: 28 }, // left of where drives land
+      { x: 129, z: -240, rx: 8.5, rz: 5, rot: 35 }, // short left of the green
+      { x: 174, z: -247, rx: 5, rz: 8.5, rot: 0 } // beyond it
+    ],
+    water: []
+  },
+  {
+    // From the headland across the bay to a green on the beach, the huts behind it.
+    name: 'Beach Hut Bay',
+    par: 3,
+    tee: { x: 147, z: -220 },
+    fairway: [],
+    green: {
+      x: 23,
+      z: -161,
       rx: 12,
       rz: 11,
       fringe: 0.22,
-      base: 0.3,
-      tilt: [0.012, -0.01], // rises to the right, falls toward the back (the sea)
-      bumps: [
-        { x: -5, z: -3, h: 0.14, r: 3 }, // a shoulder on the front left
-        { x: 4, z: 4, h: -0.1, r: 3.2 } // a hollow on the back right
-      ]
-    },
-    cup: { x: -9, z: 263 }
-  },
-  {
-    // From a forward tee on the left, across the fairway to a green against the dunes: the beach
-    // and the sea are just beyond it, so a slice finds sand or water.
-    name: 'Beach Hut Bay',
-    par: 3,
-    tee: { x: -26, z: 22 },
-    green: {
-      x: 40,
-      z: 160,
-      rx: 11,
-      rz: 10,
-      fringe: 0.22,
       base: 0.35,
-      tilt: [-0.014, 0.008], // falls toward the sea on the right, rises to the back
+      tilt: [0.014, 0.008], // rises away from the tee, toward the huts
       bumps: [
-        { x: 4, z: -3, h: 0.12, r: 2.8 }, // a knuckle on the front right
-        { x: -4, z: 3, h: -0.09, r: 3 } // a dip on the back left
+        { x: 4, z: -3, h: 0.12, r: 2.8 },
+        { x: -4, z: 3, h: -0.09, r: 3 }
       ]
     },
-    cup: { x: 42, z: 161 }
+    cup: { x: 21, z: -160 },
+    sand: [
+      { x: 55, z: -165, rx: 15, rz: 26, rot: 0 }, // the beach, between the bay and the green
+      { x: 7, z: -148, rx: 7.5, rz: 4.6, rot: -30 } // a pot bunker behind
+    ],
+    water: []
   },
   {
-    // From the back tee on the right, the long diagonal the other way to a green tucked under the
-    // hills, on a shelf higher than the others.
+    // Back inland down a valley between the hills, bending left, to a green by the clubhouse
+    // with a pond across its front.
     name: 'Shady Hill',
     par: 4,
-    tee: { x: 36, z: -2 },
+    tee: { x: -25, z: -132 },
+    via: { x: -120, z: -236 }, // a lay-up past the bend, short of the pond; the pin is a driver away over the hill
+    fairway: [{ x: -25, z: -132 }, { x: -118, z: -207 }, { x: -123, z: -326 }],
     green: {
-      x: -48,
-      z: 206,
-      rx: 11,
-      rz: 11,
+      x: -123,
+      z: -326,
+      rx: 13,
+      rz: 12,
       fringe: 0.24,
-      base: 0.6,
-      tilt: [0.018, 0.006], // falls away from the hills, to the left
+      base: 0.45,
+      tilt: [0.012, 0.01], // falls toward the front left
       bumps: [
         { x: 3, z: 0, h: 0.16, r: 3 }, // a ridge through the middle
         { x: -5, z: -4, h: -0.1, r: 2.8 }
       ]
     },
-    cup: { x: -51, z: 208 }
+    cup: { x: -125, z: -328 },
+    sand: [
+      { x: -138, z: -203, rx: 7.5, rz: 13.5, rot: -35 }, // on the outside of the bend
+      { x: -99, z: -329, rx: 5, rz: 9, rot: 0 }, // left of the green
+      { x: -130, z: -348, rx: 8.5, rz: 4.6, rot: 0 } // behind it
+    ],
+    water: [{ x: -136, z: -288, rx: 23, rz: 12, rot: 0 }] // carry it, lay up, or skirt it on the left
   }
 ]
+
+/** How far out of an ellipse a point is: < 1 inside. */
+export function ellipseReach(x, z, e) {
+  const a = ((e.rot ?? 0) * Math.PI) / 180
+  const u = (x - e.x) * Math.cos(a) + (z - e.z) * Math.sin(a)
+  const v = -(x - e.x) * Math.sin(a) + (z - e.z) * Math.cos(a)
+  return Math.hypot(u / e.rx, v / e.rz)
+}
+
+/** Distance (m) from a point to a line of points. */
+export function distToLine(x, z, pts) {
+  let best = Infinity
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const a = pts[i]
+    const b = pts[i + 1]
+    const dx = b.x - a.x
+    const dz = b.z - a.z
+    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / (dx * dx + dz * dz || 1)))
+    best = Math.min(best, Math.hypot(x - a.x - dx * t, z - a.z - dz * t))
+  }
+  return best
+}
+
+/** Half the width of a mown fairway (m), and how far round a green its apron is mown (in reach). */
+export const FAIRWAY_HALF = 16
+export const APRON = 1.75
 
 /** The course as a whole. */
 export const COURSE = { name: 'Seaside', par: HOLES.reduce((a, h) => a + h.par, 0) }
 
-/** A hole's length in yards, tee to pin. */
-export const holeYards = (h) => Math.round(Math.hypot(h.cup.x - h.tee.x, h.cup.z - h.tee.z) / YD)
+/** A hole's length in yards, along its fairway from the tee to the pin (straight, on a par 3). */
+export function holeYards(h) {
+  const pts = h.fairway.length ? [...h.fairway.slice(0, -1), h.cup] : [h.tee, h.cup]
+  let m = 0
+  for (let i = 0; i + 1 < pts.length; i++) m += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].z - pts[i].z)
+  return Math.round(m / YD)
+}
 
 /** After this many strokes on a hole, the ball is picked up. */
 export const MAX_STROKES = 10

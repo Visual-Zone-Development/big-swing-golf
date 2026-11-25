@@ -78,6 +78,9 @@ export const TUNING = {
     roughBounce: 0.2,
     hopMin: 0.8, // m/s up after a bounce: slower than this and it's rolling
     roughRoll: 3.2, // extra rolling drag in the rough (m/s²)
+    sandKeep: 0.12, // share of its pace a ball keeps landing in sand: it plugs
+    sandRoll: 30, // rolling drag in sand (m/s²): it stops almost dead
+    sandCarry: 0.67, // a shot out of sand goes this share as far, except with the sand wedge
     rollEase: 0.4, // rolling drag falls to this share of itself…
     rollEaseBelow: 4, // …as it slows from this speed (m/s) to a stop: it trickles out
     stopSpeed: 0.08,

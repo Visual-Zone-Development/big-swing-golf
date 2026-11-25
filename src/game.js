@@ -331,7 +331,17 @@ const PT = TUNING.putting
 /** A seat's putt for the view: from, cup, the aimed direction (radians) and the green. */
 const puttOf = (s) => (s?.ball && s.cup ? { from: s.ball, cup: s.cup, dir: ((bearing(s.ball, s.cup) + (s.paim ?? 0)) * Math.PI) / 180, green: greenOf() } : null)
 /** The course: the line from the ball to the pin (degrees from downrange). */
-const lineDeg = (s) => bearing(s.ball, s.cup)
+const lineDeg = (s) => lineFrom(s.ball, s)
+/**
+ * The line a shot from this spot starts on: to the pin, except from the tee of a hole that bends,
+ * where it's down the fairway.
+ */
+const lineFrom = (spot, s) => bearing(spot, targetFrom(spot, s))
+/** What a shot from this spot is played toward: the pin, or from the tee of a hole that bends, its landing spot. */
+const targetFrom = (spot, s) => (isCourse() && hole().via && Math.hypot(spot.x - hole().tee.x, spot.z - hole().tee.z) < 1 ? hole().via : s.cup)
+/** In sand (a bunker or a beach): every club but the sand wedge loses a third of its distance. */
+const inSand = (s) => isCourse() && Boolean(s?.ball) && ['sand', 'bunker'].includes(lieAt(s.ball.x, s.ball.z))
+const sandCarry = (s, club) => (inSand(s) && club.id !== 'sw' ? TUNING.ball.sandCarry : 1)
 /** The course: a seat on the tee of the hole being played, nothing played. */
 function toTee(s) {
   s.ball = { ...hole().tee }
@@ -455,7 +465,10 @@ function startTurn() {
   else if (isCourse() && s) {
     // A full shot on the course: aimed at the pin, with the club that gets there.
     s.aim = 0
-    s.club = clubFor(yardsToPin(s.ball, s.cup), CLUBS)
+    // From sand the clubs go two-thirds as far, so it takes more club (or the wedge, if it reaches).
+    const yd = yardsToPin(s.ball, targetFrom(s.ball, s))
+    const wedge = CLUBS.findIndex((c) => c.id === 'sw')
+    s.club = inSand(s) ? (CLUBS[wedge].carry >= yd - 5 ? wedge : clubFor(yd / TUNING.ball.sandCarry, CLUBS)) : clubFor(yd, CLUBS)
   }
   snapCamera(s)
   publish()
@@ -610,7 +623,7 @@ function take(sw) {
   const hand = sw.hand ?? s.hand ?? settings.data.hand
   // On the course, from wherever it lies, aimed off the line to the pin (and it can go in).
   const from = isCourse() ? { ...s.ball } : null
-  const result = isCourse() ? strike(clean, club, lineDeg(s) + s.aim, hand, TUNING.ball, { from, cup: s.cup }) : strike(clean, club, s.aim, hand)
+  const result = isCourse() ? strike({ ...clean, power: clean.power * sandCarry(s, club) }, club, lineDeg(s) + s.aim, hand, TUNING.ball, { from, cup: s.cup }) : strike(clean, club, s.aim, hand)
   state.shot = { result, t: 0, landed: false, seat: s, input: { ...sw, ...clean }, club, from }
   state.phase = 'flight'
   state.follow = 0.5
@@ -925,7 +938,7 @@ function finishShot() {
 }
 
 /** How the course's lies read on the TV. */
-const LIES = { green: 'On the green!', fringe: 'Just off the green', fairway: 'Fairway', rough: 'In the rough', hill: 'Up on the hill', sand: 'On the beach', wrong: 'Wrong green!' }
+const LIES = { green: 'On the green!', fringe: 'Just off the green', fairway: 'Fairway', rough: 'In the rough', hill: 'Up on the hill', sand: 'On the beach', bunker: 'In the bunker!', wrong: 'Wrong green!' }
 
 /**
  * A full shot on the course has stopped: count it, move the ball to where it lies (the sea is a
@@ -938,7 +951,7 @@ function finishCourseShot() {
   const f = r.flight
   s.strokes++
   let banner
-  if (f.water) {
+  if (f.water || lieAt(f.rest.x, f.rest.z) === 'water') {
     s.strokes++
     banner = { text: 'Splash!', sub: '+1 stroke · play it again from there', color: '#7fd6ff' }
     view.react(s.look, 'sad')
@@ -1224,8 +1237,8 @@ function draw(dt) {
   view.draw({
     mode,
     putting: P,
-    aim: course ? bearing(spot, s.cup) + s.aim : (s?.aim ?? 0),
-    tee: course ? { x: spot.x, z: spot.z, dir: (bearing(spot, s.cup) * Math.PI) / 180 } : null,
+    aim: course ? lineFrom(spot, s) + s.aim : (s?.aim ?? 0),
+    tee: course ? { x: spot.x, z: spot.z, dir: (lineFrom(spot, s) * Math.PI) / 180 } : null,
     flag: inGame && isCourse() ? { cup: hole().cup, green: hole().green } : null,
     ball: sh?.pos ?? ballAtRest,
     trail: sh ? pts.slice(0, sh.trailN ?? 0).concat(sh.pos ? [{ ...sh.pos }] : []) : [],
@@ -1960,7 +1973,7 @@ function clubCard(s) {
   const club = CLUBS[s.club]
   const short = putting ? 'PT' : club.short
   const name = putting ? 'Putter' : club.name
-  const line = putting ? (s.ball && s.cup ? puttRead(s) : '') : `${club.carry} yd carry`
+  const line = putting ? (s.ball && s.cup ? puttRead(s) : '') : sandCarry(s, club) < 1 ? `${Math.round(club.carry * sandCarry(s, club))} yd from sand` : inSand(s) ? `${club.carry} yd · good from sand` : `${club.carry} yd carry`
   const aim = putting ? Math.round(s.paim * 2) / 2 : Math.round(s.aim)
   const aimText = aim ? `aim ${Math.abs(aim)}° ${aim > 0 ? 'right' : 'left'}` : ''
   hud.club = `${short} ${name}`
@@ -2376,55 +2389,93 @@ function drawMap() {
   dot(sx(0), sy(0), 5, INK)
 }
 
-/** The course: the hole from above, with the pin and everyone's ball. */
+/** The course: the hole from above, turned so it plays up the card, with the pin and everyone's ball. */
+const HOLE_MAP = { x: 0, y: 310, w: 140, h: 260, tints: { water: '#2f96d8', sand: '#f1dfa6', bunker: '#f1dfa6', fairway: '#7fd957', green: '#bdf794', fringe: '#9fe676', rough: '#4a9c3f', hill: '#37803a' } }
+const holeMaps = new Map()
+/** World → card for a hole: the tee near the bottom, the green near the top. */
+function holeMapView(H) {
+  const { w, h } = HOLE_MAP
+  const len = Math.hypot(H.green.x - H.tee.x, H.green.z - H.tee.z)
+  const u = { x: (H.green.x - H.tee.x) / len, z: (H.green.z - H.tee.z) / len }
+  const k = (h - 56) / len
+  return {
+    k,
+    to: (p) => ({ x: w / 2 + ((p.x - H.tee.x) * u.z - (p.z - H.tee.z) * u.x) * k, y: h - 22 - ((p.x - H.tee.x) * u.x + (p.z - H.tee.z) * u.z) * k }),
+    from: (mx, my) => {
+      const side = (mx - w / 2) / k
+      const along = (h - 22 - my) / k
+      return { x: H.tee.x + along * u.x + side * u.z, z: H.tee.z + along * u.z - side * u.x }
+    }
+  }
+}
+/** The ground of a hole's card, painted once: what lies where, in little squares. */
+function holeMapImage(i) {
+  if (holeMaps.has(i)) return holeMaps.get(i)
+  const { w, h, tints } = HOLE_MAP
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const g = c.getContext('2d')
+  const v = holeMapView(HOLES[i])
+  const cell = 2
+  for (let my = 0; my < h; my += cell) {
+    for (let mx = 0; mx < w; mx += cell) {
+      const p = v.from(mx + cell / 2, my + cell / 2)
+      g.fillStyle = tints[lieAt(p.x, p.z)] ?? tints.rough
+      g.fillRect(mx, my, cell, cell)
+    }
+  }
+  holeMaps.set(i, c)
+  return c
+}
 function drawHoleMap(s) {
+  const { y, w, h } = HOLE_MAP
   const x = W - 172
-  const y = 310
-  const w = 140
-  const h = 260
-  panel(x - 10, y - 10, w + 20, h + 20, 16, 'rgba(11,26,54,0.5)')
-  const { green: G, tee, cup, name } = hole()
-  const top = Math.max(...HOLES.map((h) => h.green.z + h.green.rz * 1.6))
-  const half = 70
-  const sx = (gx) => x + w / 2 + (gx / half) * (w / 2)
-  const sy = (gz) => y + h - 14 - (gz / top) * (h - 28)
-  // The fairway fan, the green, the tee.
-  ctx.fillStyle = 'rgba(95,207,74,0.35)'
+  const { tee, cup, name } = hole()
+  const v = holeMapView(hole())
+  const at = (p) => {
+    const m = v.to(p)
+    return { x: x + clamp(m.x, 6, w - 6), y: y + clamp(m.y, 6, h - 6) }
+  }
+  panel(x - 10, y - 10, w + 20, h + 20, 16, 'rgba(11,26,54,0.6)')
+  ctx.save()
   ctx.beginPath()
-  ctx.moveTo(sx(-fairwayHalf(0)), sy(0))
-  ctx.lineTo(sx(-Math.min(half, fairwayHalf(top))), sy(top))
-  ctx.lineTo(sx(Math.min(half, fairwayHalf(top))), sy(top))
-  ctx.lineTo(sx(fairwayHalf(0)), sy(0))
-  ctx.fill()
-  ctx.fillStyle = 'rgba(134,224,92,0.9)'
-  ctx.beginPath()
-  ctx.ellipse(sx(G.x), sy(G.z), (G.rx / half) * (w / 2), (G.rz / top) * (h - 28), 0, 0, Math.PI * 2)
-  ctx.fill()
-  dot(sx(tee.x), sy(tee.z), 5, INK)
+  ctx.roundRect(x, y, w, h, 10)
+  ctx.clip()
+  ctx.globalAlpha = 0.92
+  ctx.drawImage(holeMapImage(state.hole), x, y)
+  ctx.restore()
+  dot(at(tee).x, at(tee).y, 5, INK)
   // The pin.
+  const pin = at(cup)
   ctx.strokeStyle = INK
   ctx.lineWidth = 2
   ctx.beginPath()
-  ctx.moveTo(sx(cup.x), sy(cup.z))
-  ctx.lineTo(sx(cup.x), sy(cup.z) - 16)
+  ctx.moveTo(pin.x, pin.y)
+  ctx.lineTo(pin.x, pin.y - 16)
   ctx.stroke()
   ctx.fillStyle = PINK
   ctx.beginPath()
-  ctx.moveTo(sx(cup.x), sy(cup.z) - 16)
-  ctx.lineTo(sx(cup.x) + 10, sy(cup.z) - 12)
-  ctx.lineTo(sx(cup.x), sy(cup.z) - 8)
+  ctx.moveTo(pin.x, pin.y - 16)
+  ctx.lineTo(pin.x + 10, pin.y - 12)
+  ctx.lineTo(pin.x, pin.y - 8)
   ctx.fill()
   // Everyone's ball (the one up ringed).
   for (const o of state.seats) {
     if (!o.ball || o.done) continue
-    dot(sx(clamp(o.ball.x, -half, half)), sy(clamp(o.ball.z, 0, top)), o === s ? 6 : 5, o.color)
+    const b = at(o.ball)
+    ctx.strokeStyle = '#0b1a36'
+    ctx.lineWidth = 2
+    dot(b.x, b.y, o === s ? 6 : 5, o.color)
+    ctx.stroke()
     if (o === s) {
+      ctx.strokeStyle = INK
       ctx.beginPath()
-      ctx.arc(sx(clamp(o.ball.x, -half, half)), sy(clamp(o.ball.z, 0, top)), 10, 0, Math.PI * 2)
+      ctx.arc(b.x, b.y, 10, 0, Math.PI * 2)
       ctx.stroke()
     }
   }
-  text(name, x + w / 2, y + 6, fitFont(rubik, 16, w - 10, name), QUIET)
+  text(name, x + w / 2, y + 12, fitFont(rubik, 16, w - 10, name), INK)
 }
 
 /** Where the results card, its rows and its buttons sit for n players: one card, centred. */

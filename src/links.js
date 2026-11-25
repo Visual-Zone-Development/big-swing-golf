@@ -61,6 +61,12 @@ const rolls = (x, z) => 0.9 + 0.6 * Math.sin(x * 0.045 + z * 0.03) + 0.3 * Math.
 const farHills = (x, z) => 14 + 6 * Math.sin(x * 0.021 + z * 0.013) + 4 * Math.sin(z * 0.029 - x * 0.017 + 1.3)
 
 /**
+ * How wide the beach is (m in from the shore): a narrow strip everywhere, opening out to a proper
+ * beach at the head of the bay, in front of the second green.
+ */
+export const beachWidth = (x, z) => 7 + 24 * Math.exp(-((x - 58) ** 2 + (z + 168) ** 2) / (2 * 20 * 20))
+
+/**
  * How far (m) a point is from anything that has to lie flat: a fairway, a green and its apron, a
  * tee, a bunker or a pond. 0 on them.
  */
@@ -89,8 +95,8 @@ export function linksHeight(x, z) {
     if (e < 1) h += m.h * (1 - smooth(0.15, 1, e))
   }
   h += (smooth(-230, -330, x) + smooth(-470, -570, z)) * farHills(x, z)
-  // Level by the shore, then the beach dips to the water's edge.
-  return h * open * smooth(6, 40, shore) - 0.6 * (1 - smooth(0, 7, shore))
+  // Level by the shore, then the beach dips to the water's edge (never under anything mown).
+  return h * open * smooth(6, 40, shore) - 0.6 * (1 - smooth(0, beachWidth(x, z), shore)) * smooth(0, 5, mownDistance(x, z))
 }
 
 /** Down in a pond (m, 0 outside): deep enough to be water, with a short bank. */
@@ -104,17 +110,17 @@ export function pondDip(x, z) {
 
 /**
  * How the ball lies on the course's ground (greens aside, which terrain.js checks first):
- * 'water' | 'bunker' | 'sand' (a beach) | 'fairway' | 'hill' | 'rough'.
+ * 'water' | 'bunker' | 'fairway' | 'sand' (the beach along the shore) | 'hill' | 'rough'.
  */
 export function linksLie(x, z) {
   const shore = shoreDistance(x, z)
   if (shore < -1.5) return 'water'
   for (const h of HOLES) for (const e of h.water) if (ellipseReach(x, z, e) < 1) return 'water'
-  for (const h of HOLES) for (const e of h.sand) if (ellipseReach(x, z, e) < 1) return e.rx * e.rz > 250 ? 'sand' : 'bunker'
-  if (shore < 7) return 'sand'
+  for (const h of HOLES) for (const e of h.sand) if (ellipseReach(x, z, e) < 1) return 'bunker'
   for (const h of HOLES) {
     if (h.fairway.length && distToLine(x, z, h.fairway) < FAIRWAY_HALF) return 'fairway'
     if (greenReach(x, z, h.green) < APRON) return 'fairway'
   }
+  if (shore < beachWidth(x, z)) return 'sand'
   return linksHeight(x, z) > 3 ? 'hill' : 'rough'
 }

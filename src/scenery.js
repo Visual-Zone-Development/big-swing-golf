@@ -9,7 +9,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import { TUNING, YD } from './tuning.js'
 import { fairwayHalf, groundHeight, landHeight, lieAt, SEA_LEVEL, surfaceAt } from './terrain.js'
-import { APRON, FAIRWAY_HALF, ellipseReach, HOLES } from './course.js'
+import { APRON, FAIRWAY_HALF, ellipseReach, HOLES, trapOutline } from './course.js'
 import { COAST, HILLS, shoreDistance } from './links.js'
 import { GREEN, greenReach, puttHeight, slopeAt } from './putting.js'
 import { createTufts, grassMaterial, grassUVs, setGrassDetail } from './grass.js'
@@ -435,6 +435,93 @@ function groundEllipse(e, y, grow = 0, segments = 40) {
   return g.translate(e.x, y, -e.z)
 }
 
+/** The inside of a trap, flat at height y: a fan out to its irregular edge, with UVs in metres. */
+function trapFill(e, y) {
+  const edge = trapOutline(e, 72)
+  const pos = []
+  const uv = []
+  const put = (p) => {
+    pos.push(p.x, y, -p.z)
+    uv.push(p.x / 5, p.z / 5)
+  }
+  edge.forEach((p, i) => {
+    const q = edge[(i + 1) % edge.length]
+    // Wound so it faces up (the outline runs clockwise seen from above once game z is three −z).
+    put(e)
+    put(p)
+    put(q)
+  })
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
+  g.computeVertexNormals()
+  return g
+}
+
+/**
+ * A band round a trap's edge, shaped by rows from the inside out: each { grow (m out from the
+ * edge), y (height), color }. Painted per row, so it shades from sand up into grass.
+ */
+function trapLip(e, rows) {
+  const n = 72
+  const loops = rows.map((r) => trapOutline(e, n, r.grow))
+  const pos = []
+  const col = []
+  const c = new THREE.Color()
+  const put = (k, i) => {
+    const p = loops[k][i % n]
+    pos.push(p.x, rows[k].y, -p.z)
+    c.set(rows[k].color)
+    col.push(c.r, c.g, c.b)
+  }
+  for (let k = 0; k + 1 < rows.length; k++) {
+    for (let i = 0; i < n; i++) {
+      put(k, i)
+      put(k + 1, i)
+      put(k, i + 1)
+      put(k + 1, i)
+      put(k + 1, i + 1)
+      put(k, i + 1)
+    }
+  }
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3))
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array((pos.length / 3) * 2), 2))
+  g.computeVertexNormals()
+  return g
+}
+
+/** Raked sand: a warm speckle with soft curved rake lines, tiling every 5 m. */
+function sandTexture() {
+  const size = 256
+  const cv = document.createElement('canvas')
+  cv.width = cv.height = size
+  const g = cv.getContext('2d')
+  g.fillStyle = COLORS.sand
+  g.fillRect(0, 0, size, size)
+  const rand = rng(7)
+  for (let i = 0; i < 2600; i++) {
+    g.fillStyle = rand() < 0.5 ? 'rgba(255,250,225,0.5)' : 'rgba(196,160,96,0.35)'
+    g.fillRect(rand() * size, rand() * size, 1 + rand() * 2, 1 + rand() * 2)
+  }
+  // Rake lines: gentle waves across, a light ridge beside a darker groove; they wrap at the edges.
+  for (let y = 4; y < size; y += 16) {
+    for (const [dy, style] of [[0, 'rgba(176,140,82,0.42)'], [3, 'rgba(255,248,220,0.5)']]) {
+      g.strokeStyle = style
+      g.lineWidth = 2.2
+      g.beginPath()
+      for (let x = 0; x <= size; x += 4) g.lineTo(x, y + dy + Math.sin((x / size) * Math.PI * 4) * 4)
+      g.stroke()
+    }
+  }
+  const t = new THREE.CanvasTexture(cv)
+  t.wrapS = t.wrapT = THREE.RepeatWrapping
+  t.colorSpace = THREE.SRGBColorSpace
+  t.anisotropy = 4
+  return t
+}
+
 /**
  * The course's own scenery, on its ground south of the range (links.js): mown fairways and
  * aprons, bunkers and beaches, the pond, trees on the hills and down the third hole's valley,
@@ -463,30 +550,39 @@ function courseScenery(scene) {
   mown.receiveShadow = true
   scene.add(mown)
 
-  // Sand: a darker lip under each trap, the sand on top.
+  // Bunkers: an irregular pool of raked sand with a raised grass lip round it, so it reads as a
+  // hollow from any side. Ponds: the same shape of water inside a low bank.
   const sandParts = []
   const lipParts = []
   const waterParts = []
-  const bankParts = []
   for (const h of HOLES) {
     for (const e of h.sand) {
-      lipParts.push(groundEllipse(e, 0.02, 0.7))
-      sandParts.push(groundEllipse(e, 0.035))
+      sandParts.push(trapFill(e, 0.05))
+      lipParts.push(trapLip(e, [
+        { grow: 0, y: 0.05, color: '#d8bd78' }, // the sand's shaded face
+        { grow: 0.3, y: 0.3, color: '#e9d596' },
+        { grow: 0.55, y: 0.42, color: '#63b83f' }, // the crest of the lip, in grass
+        { grow: 1.1, y: 0.26, color: '#58ad3a' },
+        { grow: 2, y: 0.012, color: COLORS.rough }
+      ]))
     }
     for (const e of h.water) {
-      bankParts.push(groundEllipse(e, 0.02, 1.1))
-      waterParts.push(groundEllipse(e, 0.04, -0.4))
+      waterParts.push(trapFill(e, 0.04))
+      lipParts.push(trapLip(e, [
+        { grow: -0.5, y: 0.05, color: '#3f7f4a' }, // reeds' green at the water's edge
+        { grow: 0.25, y: 0.16, color: '#4f9c3c' },
+        { grow: 1.5, y: 0.012, color: COLORS.rough }
+      ]))
     }
   }
   const flat = (parts, mat) => {
     if (!parts.length) return
-    const m = new THREE.Mesh(mergeGeometries(parts.map((g) => g.toNonIndexed())), mat)
+    const m = new THREE.Mesh(mergeGeometries(parts), mat)
     m.receiveShadow = true
     scene.add(m)
   }
-  flat(lipParts, new THREE.MeshStandardMaterial({ color: '#d9bf7a', roughness: 1 }))
-  flat(sandParts, new THREE.MeshStandardMaterial({ color: COLORS.sand, roughness: 1 }))
-  flat(bankParts, new THREE.MeshStandardMaterial({ color: '#3d8f3a', roughness: 1 }))
+  flat(sandParts, new THREE.MeshStandardMaterial({ color: '#ffffff', map: sandTexture(), roughness: 1 }))
+  flat(lipParts, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }))
   flat(waterParts, new THREE.MeshStandardMaterial({ color: COLORS.sea, roughness: 0.12, metalness: 0.05 }))
 
   // Trees: thick on the hills, a loose line down each side of the third hole's valley, a few

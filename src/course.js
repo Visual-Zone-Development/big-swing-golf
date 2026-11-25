@@ -14,8 +14,9 @@ import { YD } from './tuning.js'
  *     height, a tilt (rise per metre along +x, and along +z) and soft humps
  *   fairway: the mown line from the tee to the green, as points (a par 3 has none: its green has
  *     an apron); `via` is where the tee shot is aimed, and clubbed for, on a hole that bends
- *   sand: bunkers and beaches, ellipses { x, z, rx, rz, rot (degrees, +x toward +z) }
- *   water: ponds, ellipses the same way (the sea is links.js's coast)
+ *   sand: bunkers, each an ellipse { x, z, rx, rz, rot (degrees, +x toward +z) } with a lobed,
+ *     irregular edge (trapEdge); beaches are the shore's (links.js)
+ *   water: ponds, the same way with a gentler edge (the sea is links.js's coast)
  */
 export const HOLES = [
   {
@@ -67,9 +68,10 @@ export const HOLES = [
       ]
     },
     cup: { x: 21, z: -160 },
+    // The beach between the bay and the green is the shore's own sand (links.js), wider here.
     sand: [
-      { x: 55, z: -165, rx: 15, rz: 26, rot: 0 }, // the beach, between the bay and the green
-      { x: 7, z: -148, rx: 7.5, rz: 4.6, rot: -30 } // a pot bunker behind
+      { x: 2, z: -145, rx: 7.5, rz: 4.6, rot: -30 }, // a pot bunker behind
+      { x: 5, z: -174, rx: 6, rz: 4.2, rot: 40 } // and one short left
     ],
     water: []
   },
@@ -104,12 +106,40 @@ export const HOLES = [
   }
 ]
 
-/** How far out of an ellipse a point is: < 1 inside. */
+for (const h of HOLES) {
+  for (const e of h.sand) e.wobble ??= 1
+  for (const e of h.water) e.wobble ??= 0.45
+}
+
+/**
+ * A trap's edge isn't a plain oval: how far out it reaches (1 = the ellipse) in the direction
+ * `a` (radians, in the ellipse's own axes). Lobes of 2, 3 and 5 to a turn, different for every trap.
+ */
+export function trapEdge(e, a) {
+  const k = e.x * 0.37 + e.z * 0.61
+  return 1 + (e.wobble ?? 0) * (0.17 * Math.sin(3 * a + k) + 0.09 * Math.sin(2 * a + k * 1.7) + 0.05 * Math.sin(5 * a + k * 0.6))
+}
+
+/** How far out of a trap (or any ellipse) a point is: < 1 inside. */
 export function ellipseReach(x, z, e) {
   const a = ((e.rot ?? 0) * Math.PI) / 180
-  const u = (x - e.x) * Math.cos(a) + (z - e.z) * Math.sin(a)
-  const v = -(x - e.x) * Math.sin(a) + (z - e.z) * Math.cos(a)
-  return Math.hypot(u / e.rx, v / e.rz)
+  const u = ((x - e.x) * Math.cos(a) + (z - e.z) * Math.sin(a)) / e.rx
+  const v = (-(x - e.x) * Math.sin(a) + (z - e.z) * Math.cos(a)) / e.rz
+  return Math.hypot(u, v) / (e.wobble ? trapEdge(e, Math.atan2(v, u)) : 1)
+}
+
+/** A trap's outline as n points in game space ({x, z}), pushed `grow` metres outward. */
+export function trapOutline(e, n = 64, grow = 0) {
+  const r = ((e.rot ?? 0) * Math.PI) / 180
+  const pts = []
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2
+    const f = trapEdge(e, a)
+    const u = (e.rx * f + grow) * Math.cos(a)
+    const v = (e.rz * f + grow) * Math.sin(a)
+    pts.push({ x: e.x + u * Math.cos(r) - v * Math.sin(r), z: e.z + u * Math.sin(r) + v * Math.cos(r) })
+  }
+  return pts
 }
 
 /** Distance (m) from a point to a line of points. */

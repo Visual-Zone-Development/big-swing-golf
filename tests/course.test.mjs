@@ -2,7 +2,7 @@
 // No browser needed. Run: node --test tests/
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { clubFor, COURSE, courseStandings, distToLine, ellipseReach, FAIRWAY_HALF, HOLES, holeYards, nextToPlay, roundTotal, scoreName, toPar, yardsToPin } from '../src/course.js'
+import { clubFor, COURSE, courseStandings, distToLine, ellipseReach, FAIRWAY_HALF, HOLES, holeYards, nextToPlay, roundTotal, scoreName, toPar, trapOutline, yardsToPin } from '../src/course.js'
 import { simulate } from '../src/flight.js'
 import { greenHeight, greenReach } from '../src/green.js'
 import { shoreDistance } from '../src/links.js'
@@ -50,14 +50,11 @@ test('every hole has sand, the third has a pond, and the traps lie as they shoul
   for (const h of HOLES) {
     assert.ok(h.sand.length >= 2, `${h.name} has bunkers`)
     for (const e of h.sand) {
-      assert.ok(['bunker', 'sand'].includes(lieAt(e.x, e.z)), `${h.name}: sand at ${e.x}, ${e.z} is ${lieAt(e.x, e.z)}`)
-      assert.ok(greenReach(e.x, e.z, h.green) > 1 + h.green.fringe, `${h.name}: a trap isn't on the green`)
+      assert.equal(lieAt(e.x, e.z), 'bunker', `${h.name}: the bunker at ${e.x}, ${e.z}`)
     }
     // A fairway runs unbroken along its line (apart from the pond on the third).
     for (const p of h.fairway.slice(0, -1)) assert.equal(lieAt(p.x, p.z), 'fairway', `${h.name}: the fairway at ${p.x}, ${p.z}`)
   }
-  assert.equal(lieAt(BAY.sand[0].x, BAY.sand[0].z), 'sand', 'the beach in front of the second green')
-  assert.equal(lieAt(FIRST.sand[0].x, FIRST.sand[0].z), 'bunker')
   const pond = HILL.water[0]
   assert.equal(lieAt(pond.x, pond.z), 'water')
   assert.ok(groundHeight(pond.x, pond.z) < SEA_LEVEL, 'the pond is deep enough to keep a ball')
@@ -200,4 +197,32 @@ test('a ball that runs up onto the hills settles within a few seconds, never rol
       assert.ok(rolling < 9, `${hole.name}, face ${face}: still going ${rolling.toFixed(1)} s after landing, on the ${lieAt(f.rest.x, f.rest.z)}`)
     }
   }
+})
+
+test('a bunker or a pond has an irregular edge, lies on level ground and keeps off the greens; the beach is the shore’s own sand', () => {
+  for (const h of HOLES) {
+    for (const e of [...h.sand, ...h.water]) {
+      const edge = trapOutline(e, 64)
+      const reach = edge.map((p) => Math.hypot(p.x - e.x, p.z - e.z))
+      // Not a plain oval: the edge comes in and out by more than an ellipse of its size would
+      // (a pond's more gently than a bunker's).
+      const plain = Math.max(e.rx, e.rz) / Math.min(e.rx, e.rz)
+      assert.ok(Math.max(...reach) / Math.min(...reach) > plain * (h.sand.includes(e) ? 1.12 : 1.03), `${h.name}: the trap at ${e.x}, ${e.z} is lobed`)
+      // Just inside its edge is the trap, just outside is not: the rules follow the drawn shape.
+      for (const [i, p] of trapOutline(e, 16, -0.3).entries()) assert.ok(ellipseReach(p.x, p.z, e) < 1, `${h.name}: inside at point ${i}`)
+      for (const p of trapOutline(e, 16, 0.3)) assert.ok(ellipseReach(p.x, p.z, e) > 1)
+      // Level all round (the golfer and the ball stand on the sand, not under it), and clear of every green.
+      for (const p of trapOutline(e, 32, 1.5)) {
+        assert.equal(groundHeight(p.x, p.z), 0, `${h.name}: level beside the trap at ${Math.round(p.x)}, ${Math.round(p.z)}`)
+        for (const o of HOLES) assert.ok(greenReach(p.x, p.z, o.green) > 1 + o.green.fringe, `${h.name}: a trap runs onto ${o.name}'s green`)
+      }
+    }
+    for (const e of h.sand) assert.equal(groundHeight(e.x, e.z), 0, 'a bunker’s sand is at ground level')
+  }
+  // The beach in front of the second green: sand, sloping gently down to the water, with nothing
+  // above it (it is the ground itself).
+  assert.equal(lieAt(50, -168), 'sand')
+  assert.ok(groundHeight(50, -168) < 0 && groundHeight(50, -168) > SEA_LEVEL)
+  assert.ok(groundHeight(58, -168) < groundHeight(46, -168), 'lower toward the bay')
+  assert.equal(lieAt(40, -165), 'fairway', 'the green’s apron is still mown')
 })

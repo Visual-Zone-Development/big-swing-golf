@@ -565,6 +565,10 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
       golfer(def).react(kind)
     },
     /** What a look's bean is wearing and its face now (tests, debug). */
+    /** A sculpted golfer's arms on the grip: [{ elbow: degrees bent, grow }] (null otherwise). */
+    armsOf(id) {
+      return golfers.get(id)?.arms ?? null
+    },
     /** The club a golfer is holding (a CLUBS id or 'putter'), or null before they're drawn. */
     clubOf(id) {
       return golfers.get(id)?.club ?? null

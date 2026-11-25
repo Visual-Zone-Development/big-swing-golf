@@ -473,6 +473,20 @@ test('the title rail has a Wardrobe: playing on this screen, the bean wears what
   await t.page.close()
 })
 
+test('the sculpted golfer holds the grip with bent elbows, not arms stretched straight out', async () => {
+  const t = await tv({ query: '?models' })
+  await t.page.waitForFunction(() => window.__game.view.modelBeans, null, { timeout: 60000 })
+  await startParty(t, [['p1', 'Ada']])
+  await t.page.waitForFunction(() => window.__game.view.armsOf(window.__game.state.seats[0].look.id)?.[0])
+  const arms = await t.state(() => window.__game.view.armsOf(window.__game.state.seats[0].look.id))
+  for (const arm of arms) {
+    assert.ok(arm.elbow >= 15 && arm.elbow <= 120, `elbow bent ${arm.elbow}° (${JSON.stringify(arms)})`)
+    assert.ok(arm.grow <= 2.2, `arms grown ${arm.grow}×`)
+  }
+  assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
 test('the golfer holds the club that is picked: the driver, then a wedge from the phone', async () => {
   const t = await tv()
   await startParty(t, [['p1', 'Ada']])

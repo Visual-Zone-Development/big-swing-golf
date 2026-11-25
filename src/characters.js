@@ -529,11 +529,12 @@ export function makeModelBean(kit, def) {
   const swing = new THREE.Group()
   swing.position.set(0, shoulder, 0)
   lean.add(swing)
-  const hands = new THREE.Vector3(0, 0.6 - shoulder, -(front + 0.24))
+  // The hands close in front of the belly, so the elbows bend (arms straight out to a grip far
+  // in front looked like noodles); the club is long enough to reach the ball from there.
+  const hands = new THREE.Vector3(0, -0.42, -0.5)
   const wrist = new THREE.Group()
   wrist.position.copy(hands)
   swing.add(wrist)
-  const up = new THREE.Vector3(0, 1, 0)
   const ballAt = new THREE.Vector3(0, 0.05 - shoulder, -stand).sub(hands)
   const len = ballAt.length() - 0.05
   const dir = ballAt.clone().normalize()
@@ -547,6 +548,7 @@ export function makeModelBean(kit, def) {
   wrist.add(gripTop, gripLow)
   const lw = new THREE.Vector3()
   const rw = new THREE.Vector3()
+  const arms = holdingArms(bean.bones)
 
   let angle = 0
   let t = Math.random() * 10
@@ -559,6 +561,10 @@ export function makeModelBean(kit, def) {
     /** The club in the hands (a CLUBS id or 'putter'). */
     get club() {
       return clubs.club
+    },
+    /** The arms as last posed on the grip (see holdingArms). */
+    get arms() {
+      return arms.last
     },
     def,
     stand,
@@ -622,9 +628,103 @@ export function makeModelBean(kit, def) {
         gripTop.getWorldPosition(lw)
         gripLow.getWorldPosition(rw)
         // The lead hand (left for a right-hander) on top of the grip.
-        if (m > 0) bean.reach(lw, rw)
-        else bean.reach(rw, lw)
+        // The lead hand (left for a right-hander) on top of the grip, elbows bent below.
+        if (m > 0) arms.hold(lw, rw)
+        else arms.hold(rw, lw)
       } else bean.reach(null, null)
+    }
+  }
+}
+
+/** How far the arms reach when holding (of their full length): the rest is the elbows' bend. */
+const BEND_REACH = 0.9
+/** The most the arms grow to reach the grip. */
+const GROW_MAX = 2.2
+
+/**
+ * Two-bone arms for holding the club: each upper arm and forearm turn so the hand lands on its
+ * target with the elbow bending down. The bean kit's own reach() turns the whole arm straight
+ * at the target and stretches it along its length up to 1.7×, which is right for a wave but made
+ * thin noodle arms on a grip.
+ */
+function holdingArms(bones) {
+  const parts = ['Left', 'Right'].map((side) => {
+    const arm = bones[`${side}Arm`]
+    const fore = bones[`${side}ForeArm`]
+    const hand = bones[`${side}Hand`]
+    return { arm, fore, hand, armQ: arm.quaternion.clone(), armS: arm.scale.clone(), foreQ: fore.quaternion.clone(), handS: hand.scale.clone() }
+  })
+  const S = new THREE.Vector3()
+  const E = new THREE.Vector3()
+  const H = new THREE.Vector3()
+  const to = new THREE.Vector3()
+  const u = new THREE.Vector3()
+  const pole = new THREE.Vector3()
+  const elbow = new THREE.Vector3()
+  const q = new THREE.Quaternion()
+  const pq = new THREE.Quaternion()
+  const wq = new THREE.Quaternion()
+  const a = new THREE.Vector3()
+  const b = new THREE.Vector3()
+  /** Turn a bone (in world space) so the direction `from` points along `toward`. */
+  const turn = (bone, from, toward) => {
+    q.setFromUnitVectors(from.normalize(), toward.normalize())
+    bone.parent.getWorldQuaternion(pq)
+    bone.getWorldQuaternion(wq)
+    bone.quaternion.copy(pq.invert().multiply(q).multiply(wq))
+    bone.updateMatrixWorld(true)
+  }
+  function solve(p, target) {
+    p.arm.quaternion.copy(p.armQ)
+    p.arm.scale.copy(p.armS)
+    p.hand.scale.copy(p.handS)
+    p.fore.quaternion.copy(p.foreQ)
+    p.arm.updateMatrixWorld(true)
+    p.arm.getWorldPosition(S)
+    p.fore.getWorldPosition(E)
+    p.hand.getWorldPosition(H)
+    const upper = E.distanceTo(S)
+    const lower = H.distanceTo(E)
+    to.copy(target).sub(S)
+    let d = to.length()
+    // The bean's stubby arms can't reach a grip in front of its round body. They grow, evenly
+    // (longer and a touch chubbier, the gloves kept their size), just enough to leave the elbow
+    // a bend; never stretched thin along their length, which made noodles.
+    const k = Math.min(GROW_MAX, Math.max(1, d / ((upper + lower) * BEND_REACH)))
+    if (k > 1) {
+      p.arm.scale.copy(p.armS).multiplyScalar(k)
+      p.hand.scale.copy(p.handS).divideScalar(k)
+      p.arm.updateMatrixWorld(true)
+    }
+    const A = upper * k
+    const B = lower * k
+    d = Math.min(d, (A + B) * 0.999)
+    u.copy(to).normalize()
+    // The elbow bends toward the ground, out of the line from shoulder to hand.
+    pole.set(0, -1, 0).addScaledVector(u, u.y)
+    if (pole.lengthSq() < 1e-6) pole.set(0, 0, 1)
+    pole.normalize()
+    const cosA = Math.min(1, Math.max(-1, (A * A + d * d - B * B) / (2 * A * d)))
+    elbow.copy(S).addScaledVector(u, A * cosA).addScaledVector(pole, A * Math.sqrt(1 - cosA * cosA))
+    turn(p.arm, a.copy(p.fore.getWorldPosition(E)).sub(S), b.copy(elbow).sub(S))
+    p.fore.getWorldPosition(E)
+    p.hand.getWorldPosition(H)
+    turn(p.fore, a.copy(H).sub(E), b.copy(target).sub(E))
+    // How it came out: the bend at the elbow (0 = straight) and the stretch.
+    p.fore.getWorldPosition(E)
+    p.hand.getWorldPosition(H)
+    p.last = { elbow: Math.round(THREE.MathUtils.radToDeg(Math.PI - a.copy(S).sub(E).angleTo(b.copy(H).sub(E)))), grow: Math.round(k * 100) / 100 }
+  }
+  return {
+    /** The last hold's elbows ({ elbow: degrees bent, grow }), left then right. */
+    get last() {
+      return parts.map((p) => p.last ?? null)
+    },
+    /** Put the left and right hands on two world-space points. */
+    hold(left, right) {
+      parts[0].arm.parent.updateMatrixWorld(true)
+      solve(parts[0], left)
+      solve(parts[1], right)
     }
   }
 }

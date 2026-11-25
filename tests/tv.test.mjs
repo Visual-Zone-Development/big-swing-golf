@@ -659,3 +659,92 @@ test('after everyone joins, nobody is thrown onto the range: the phones get “W
   assert.deepEqual(t.errors, [])
   await t.page.close()
 })
+
+/** Play on this screen: Enter on the title's second tile, then this game in the picker. */
+async function soloGame(t, mode = 'practice') {
+  await key(t.page, 'ArrowDown')
+  await key(t.page, 'Enter')
+  await t.page.waitForFunction(() => window.__game.state.screen === 'pick')
+  await t.page.evaluate((m) => window.__game.pickMenu.select(m), mode)
+  await key(t.page, 'Enter')
+  await t.page.waitForFunction(() => window.__game.state.screen === 'playing' && window.__game.state.phase === 'aim')
+}
+/** End this turn (as if its readout were skipped) and wait for the next one. */
+async function nextTurn(t) {
+  await t.page.evaluate(() => Object.assign(window.__game.state, { phase: 'result', resultTime: 99 }))
+  await t.page.waitForFunction(() => window.__game.state.phase === 'aim')
+}
+
+test('the how-to text shows for the first two turns, then goes quiet; it comes back for someone stood at the ball, and Button hints can force it on or off', async () => {
+  const t = await tv()
+  await soloGame(t)
+  await frames(t.page)
+  assert.equal(await t.state(() => window.__game.hud.hint), true, 'first turn')
+  await nextTurn(t)
+  await frames(t.page)
+  assert.equal(await t.state(() => window.__game.hud.hint), true, 'second turn')
+  await nextTurn(t)
+  await frames(t.page)
+  assert.ok(!(await t.state(() => window.__game.hud.hint)), 'third turn: quiet')
+  await t.page.evaluate(() => (window.__game.state.aimFor = 8))
+  await frames(t.page)
+  assert.equal(await t.state(() => window.__game.hud.hint), true, 'stood at the ball a while')
+  await t.page.evaluate(() => (window.__game.settings.data.hints = 'off'))
+  await frames(t.page)
+  assert.ok(!(await t.state(() => window.__game.hud.hint)), 'Off: never')
+  await t.page.evaluate(() => Object.assign(window.__game.settings.data, { hints: 'always' }) && (window.__game.state.aimFor = 0))
+  await frames(t.page)
+  assert.equal(await t.state(() => window.__game.hud.hint), true, 'Always: every turn')
+  assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
+test('the scoreboard shows only with two or more players, and the pause button only for mouse and touch', async () => {
+  const t = await tv()
+  await soloGame(t)
+  await frames(t.page)
+  let hud = await t.state(() => window.__game.hud)
+  assert.ok(!hud.scoreboard, 'one player: no scoreboard')
+  assert.ok(!hud.pause, 'keys: Esc pauses, no button')
+  await t.page.mouse.move(640, 400)
+  await t.page.mouse.move(660, 420)
+  await frames(t.page, 3)
+  assert.equal(await t.state(() => window.__game.hud.pause), true, 'a mouse: the button')
+  await t.page.close()
+  const t2 = await tv()
+  await startParty(t2, [['p1', 'Ada'], ['p2', 'Bo']])
+  await frames(t2.page)
+  assert.equal(await t2.state(() => window.__game.hud.scoreboard), true, 'two players: the scoreboard')
+  assert.deepEqual(t2.errors, [])
+  await t2.page.close()
+})
+
+test('after a shot, practice shows its numbers in one strip; a challenge leaves it to the banner', async () => {
+  const t = await tv()
+  await startParty(t, [['p1', 'Ada']])
+  t.say('p1', { shot: SQUARE })
+  await t.page.waitForFunction(() => window.__game.state.phase === 'result', null, { timeout: 10000 })
+  await frames(t.page)
+  assert.equal(await t.state(() => window.__game.hud.readout), 'strip')
+  await t.page.close()
+  const t2 = await tv()
+  await chooseMode(t2, 1) // Target challenge
+  await startParty(t2, [['p1', 'Ada']])
+  t2.say('p1', { shot: SQUARE })
+  await t2.page.waitForFunction(() => window.__game.state.phase === 'result', null, { timeout: 10000 })
+  await frames(t2.page)
+  assert.ok(!(await t2.state(() => window.__game.hud.readout)), 'no table under the banner')
+  assert.ok(await t2.state(() => window.__game.state.banner?.text), 'the banner says it')
+  await t2.page.close()
+})
+
+test('putting with the meter, its cup mark sits halfway: where the putt’s own bar reaches the cup', async () => {
+  const t = await tv()
+  await soloGame(t, 'putting')
+  await key(t.page, 'Space') // start the meter
+  await t.page.waitForFunction(() => window.__game.state.phase === 'meter')
+  await frames(t.page)
+  const k = await t.state(() => window.__game.hud.meterCup)
+  assert.ok(Math.abs(k - 0.5) < 0.02, `cup mark at ${k}`)
+  await t.page.close()
+})

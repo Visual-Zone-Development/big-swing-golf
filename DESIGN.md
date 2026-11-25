@@ -1,6 +1,6 @@
-# Seaside Swing: design brief
+# Big Swing Golf: design brief
 
-*Called Toybox Golf until 0.5.0.*
+*Called Toybox Golf until 0.5.0, then Seaside Swing until 0.10.0. Seaside is now the name of the first course.*
 
 > Your phone is the golf club: pick a club, aim, hold SET and swing for real, and a cartoon golfer smacks the ball down a 3D range. Swing hard for distance; square the club face for a pure, straight shot.
 
@@ -178,7 +178,7 @@ flowchart LR
 - **Menus fit:** every tile, card and row fits its words to its box: text shrinks (to 60% at most) before it spills, the rail's text grows only a little with the text size, the title card grows to fit its words, and Settings scrolls a whole row at a time to keep the selected row on screen (▲ ▼ beside the list show there's more). The picker's tiles show the short name (*Target challenge*), its card the full one (*Target challenge · 10 balls*).
 - **Graphics** (Settings): *Auto* (the default: light mode when the machine needs it), *Low* (always light mode) or *High* (full quality even on a machine with no GPU).
 - **Light mode for slow machines:** with no GPU (a software renderer, like the build server) or frames slower than 30 a second for 1.5 s, the view drops to half resolution, no shadows, no anti-aliasing (software only), no finishing stack, no sky light (a stronger fill instead: on a software renderer the sky light alone cost more than the rest of the frame) and no blade detail on the grass, fewer trees, bushes and flowers, no tufts, and the hand-built beans instead of the sculpted ones. `?debug` shows draw calls, triangles and `light`.
-- **Cover / hero:** rendered by the game's own view at full detail with the sculpted beans (`preview.html?shot=cover|hero`, dev only; `createView({ full: true })` skips light mode even on a software renderer): Pip in a bucket hat and polo finishing a drive with the crew watching, *Seaside Swing* on top.
+- **Cover / hero:** rendered by the game's own view at full detail with the sculpted beans (`preview.html?shot=cover|hero`, dev only; `createView({ full: true })` skips light mode even on a software renderer): Pip in a bucket hat and polo finishing a drive with the crew watching, *Big Swing Golf* on top.
 
 ## The course
 One test hole for now (`src/course.js`): **Lighthouse Point**, a par 4 of 288 yards straight down the range to a raised green at the far end, falling gently toward the sea, with the lighthouse behind it. Played as real golf:
@@ -225,7 +225,7 @@ Club swish, impact crack (brighter and with a chime for a pure full strike), bal
 **Screens and flow**
 - [x] Title, the game picker, pause (Resume, Restart, Choose a game, Settings, Quit to title), Target and Putting challenge results, settings on `menu.js` / `settings.js`
 - [x] Auto-pause via `input.onPause`; no quit of its own; Quit to library comes from `menu.js` in the launcher
-- [x] Saves under `seaside-swing-save-v1`; `state.screen` + `window.__game` exposed
+- [x] Saves under `big-swing-golf-save-v1`; `state.screen` + `window.__game` exposed
 
 **Accessibility**
 - [x] Shot names and arrows, not just colours; no mashing; reduced shake; text scale honoured; prompts from `input.label`

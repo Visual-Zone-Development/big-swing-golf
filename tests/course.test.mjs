@@ -1,5 +1,5 @@
 // The course: the hole, its rules and a ball played down it. No browser needed.
-// Run: node --test games/seaside-swing/tests/
+// Run: node --test games/big-swing-golf/tests/
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { clubFor, courseStandings, HOLE, nextToPlay, scoreName, yardsToPin } from '../src/course.js'

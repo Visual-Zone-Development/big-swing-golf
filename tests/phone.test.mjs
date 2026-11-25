@@ -1,7 +1,7 @@
 // The phone screen (public/controller.html) in a headless browser, with a stub `controller` in
 // place of the party connection and the join page's sensor messages faked from a simulated
 // golfer (swing-sim.mjs). Holds SET with the mouse, swings, and checks what goes to the TV.
-// Run: node --test games/seaside-swing/tests/
+// Run: node --test games/big-swing-golf/tests/
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'

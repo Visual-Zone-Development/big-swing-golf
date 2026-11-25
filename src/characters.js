@@ -16,16 +16,62 @@ import { reactionPose } from './reactions.js'
 
 // ---- the bean's shape ------------------------------------------------------------------------
 
-/** The bean's profile: t 0 (bottom) to 1 (top) → [radius, height]. Fuller than an egg, a bit slimmer at the top. */
-const BEAN = { cy: 0.88, hy: 0.56, rBot: 0.37, rTop: 0.31 }
-function beanAt(t, grow = 0) {
-  const a = Math.PI * t
-  const s = Math.sin(a)
-  const r = (BEAN.rBot + (BEAN.rTop - BEAN.rBot) * t) * Math.pow(Math.max(0, s), 0.75)
-  return [Math.max(1e-4, r + grow * Math.pow(Math.max(0, s), 0.3)), BEAN.cy - BEAN.hy * Math.cos(a)]
+/**
+ * The bean's profile: a chunky jelly-bean capsule (the same shape as the sculpted bean): straight,
+ * very slightly full sides, a round dome on top and a softer, flatter round at the bottom, on
+ * short thick legs. Metres, feet at y = 0.
+ */
+export const BEAN = { y0: 0.36, y1: 1.45, r: 0.36, capTop: 0.34, capBot: 0.22, belly: 0.015 }
+/** The outline from the bottom pole to the top: [radius, height, roundness 0 at a pole … 1 on the sides]. */
+const PROFILE = (() => {
+  const { y0, y1, r, capTop, capBot, belly } = BEAN
+  const pts = []
+  for (let i = 0; i <= 40; i++) {
+    const a = (i / 40) * (Math.PI / 2) // up the bottom round, from the pole
+    pts.push([r * Math.sin(a), y0 + capBot * (1 - Math.cos(a)), Math.sin(a)])
+  }
+  const ys = y0 + capBot
+  const ye = y1 - capTop
+  for (let i = 1; i < 30; i++) {
+    const k = i / 30
+    pts.push([r * (1 + belly * Math.sin(Math.PI * k)), ys + (ye - ys) * k, 1])
+  }
+  for (let i = 0; i <= 50; i++) {
+    const a = (i / 50) * (Math.PI / 2) // over the dome, to the top pole
+    pts.push([r * Math.cos(a), ye + capTop * Math.sin(a), Math.cos(a)])
+  }
+  // t runs along the outline by length, so the canvas wraps it evenly (the face isn't stretched).
+  let L = 0
+  const len = [0]
+  for (let i = 1; i < pts.length; i++) len.push((L += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])))
+  return { pts, len, L }
+})()
+/** The bean's outline at t (0 bottom … 1 top, by length along it) → [radius, height], grown outward by `grow`. */
+export function beanAt(t, grow = 0) {
+  const { pts, len, L } = PROFILE
+  const d = Math.max(0, Math.min(1, t)) * L
+  let i = 1
+  while (i < len.length - 1 && len[i] < d) i++
+  const k = (d - len[i - 1]) / Math.max(1e-9, len[i] - len[i - 1])
+  const [r0, y0, s0] = pts[i - 1]
+  const [r1, y1, s1] = pts[i]
+  const r = r0 + (r1 - r0) * k
+  const s = s0 + (s1 - s0) * k
+  return [Math.max(1e-4, r + grow * Math.pow(Math.max(0, s), 0.3)), y0 + (y1 - y0) * k]
+}
+/** Where along the outline (t) a height is, on its sides or dome. */
+function tAt(y) {
+  const { pts, len, L } = PROFILE
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i][1] >= y) {
+      const k = (y - pts[i - 1][1]) / Math.max(1e-9, pts[i][1] - pts[i - 1][1])
+      return (len[i - 1] + (len[i] - len[i - 1]) * Math.max(0, Math.min(1, k))) / L
+    }
+  }
+  return 1
 }
 /** A lathe of the bean's profile between t0 and t1, grown outward by `grow` (clothes sit on top). */
-function beanLathe(t0 = 0, t1 = 1, grow = 0, steps = 40, segments = 48) {
+function beanLathe(t0 = 0, t1 = 1, grow = 0, steps = 64, segments = 48) {
   const pts = []
   for (let i = 0; i <= steps; i++) {
     const [r, y] = beanAt(t0 + ((t1 - t0) * i) / steps, grow)
@@ -34,9 +80,8 @@ function beanLathe(t0 = 0, t1 = 1, grow = 0, steps = 40, segments = 48) {
   return new THREE.LatheGeometry(pts, segments)
 }
 /** The bean's radius at a height (for things that sit on it: hats, the mask's strap). */
-function radiusAt(y) {
-  const c = Math.max(-1, Math.min(1, (BEAN.cy - y) / BEAN.hy))
-  return beanAt(Math.acos(c) / Math.PI)[0]
+export function radiusAt(y) {
+  return beanAt(tAt(y))[0]
 }
 
 // ---- the face ----------------------------------------------------------------------------------
@@ -46,9 +91,9 @@ function radiusAt(y) {
 // canvas), so the drawing is scaled to come out round on the bean.
 const TEX_W = 1024
 const TEX_H = 512
-const EYE_T = 0.62 // the eye line, as a fraction up the bean
+const EYE_T = tAt(1.08) // the eye line (as on the sculpted bean), as a fraction along the outline
 const PX_X = TEX_W / (2 * Math.PI * beanAt(EYE_T)[0]) / 100 // px per cm across
-const PX_Y = TEX_H / (BEAN.hy * Math.PI * Math.sin(Math.PI * EYE_T)) / 100 // px per cm down
+const PX_Y = TEX_H / (PROFILE.L * 100) // px per cm down (the canvas runs along the outline evenly)
 const FACE_SIZE = 1.5 // the face is drawn this much bigger than its centimetres: big enough to read from the couch
 
 export { FACES }
@@ -257,7 +302,6 @@ export function makeBean(def) {
   const lean = new THREE.Group() // squash, hop and spin live here, so pose() can own root
   root.add(lean)
   const color = new THREE.Color(def.color)
-  const accent = new THREE.MeshStandardMaterial({ color: color.clone().multiplyScalar(0.72), roughness: 0.5 })
   const trim = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.45 })
   const skin = new THREE.MeshStandardMaterial({ color, roughness: 0.55 })
 
@@ -279,24 +323,24 @@ export function makeBean(def) {
   shape.add(body)
   const pieces = wardrobe(def.color, shape)
 
-  // Legs and big shoes.
-  const shoeGeo = new THREE.SphereGeometry(1, 16, 10)
+  // Short, thick legs in the bean's colour, and big shoes.
+  const shoeGeo = new THREE.SphereGeometry(1, 18, 12)
   for (const s of [-1, 1]) {
-    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.2, 4, 8), accent)
-    leg.position.set(s * 0.13, 0.08 + 0.17, 0)
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.095, 0.16, 6, 14), skin)
+    leg.position.set(s * 0.15, 0.25, 0)
     leg.castShadow = true
     lean.add(leg)
     const shoe = new THREE.Mesh(shoeGeo, trim)
-    shoe.scale.set(0.12, 0.08, 0.19)
-    shoe.position.set(s * 0.14, 0.075, -0.05)
+    shoe.scale.set(0.145, 0.09, 0.21)
+    shoe.position.set(s * 0.16, 0.08, -0.05)
     shoe.castShadow = true
     lean.add(shoe)
   }
 
-  // Arms (with sleeves when a top is on), the gloves and the club swing from the shoulders. Hands
-  // meet in front; the club reaches down to the ball, which sits `stand` in front of the feet.
-  const shoulder = 0.86
-  const width = 0.32
+  // Chubby arms (with sleeves when a top is on), the gloves and the club swing from the shoulders.
+  // Hands meet in front; the club reaches down to the ball, which sits `stand` in front of the feet.
+  const shoulder = 0.9
+  const width = BEAN.r * 0.92
   const front = beanAt(0.5)[0] * 0.9
   const stand = front + 0.42
   const swing = new THREE.Group()
@@ -305,23 +349,38 @@ export function makeBean(def) {
   const hands = new THREE.Vector3(0, Math.max(0.32, shoulder - 0.42) - shoulder, -(front + 0.12))
   const up = new THREE.Vector3(0, 1, 0)
   const sleeves = []
-  for (const s of [-1, 1]) {
-    const from = new THREE.Vector3(s * width, 0, -front * 0.4)
-    const d = hands.clone().sub(from)
-    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, d.length(), 4, 8), skin)
-    arm.position.copy(from).addScaledVector(d, 0.5)
-    arm.quaternion.setFromUnitVectors(up, d.clone().normalize())
-    arm.castShadow = true
-    swing.add(arm)
-    const sleeve = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, d.length() * 0.28, 4, 10), skin)
+  /** An arm from one point to another (in `parent`'s space), with its short sleeve (hidden until a top is on). */
+  const arm = (parent, from, to) => {
+    const d = to.clone().sub(from)
+    const a = new THREE.Mesh(new THREE.CapsuleGeometry(0.068, d.length(), 6, 12), skin)
+    a.position.copy(from).addScaledVector(d, 0.5)
+    a.quaternion.setFromUnitVectors(up, d.clone().normalize())
+    a.castShadow = true
+    parent.add(a)
+    const sleeve = new THREE.Mesh(new THREE.CapsuleGeometry(0.092, d.length() * 0.28, 6, 14), skin)
     sleeve.position.copy(from).addScaledVector(d, 0.2)
-    sleeve.quaternion.copy(arm.quaternion)
+    sleeve.quaternion.copy(a.quaternion)
     sleeve.visible = false
     sleeve.castShadow = true
-    swing.add(sleeve)
+    parent.add(sleeve)
     sleeves.push(sleeve)
   }
-  const glove = new THREE.Mesh(new THREE.SphereGeometry(0.1, 14, 10), trim)
+  for (const s of [-1, 1]) arm(swing, new THREE.Vector3(s * width, 0, -front * 0.4), hands)
+  // Waiting (no club): the arms hang at the sides instead, a glove at the end of each.
+  const rest = new THREE.Group()
+  rest.position.set(0, shoulder, 0)
+  lean.add(rest)
+  for (const s of [-1, 1]) {
+    const from = new THREE.Vector3(s * width, 0, 0)
+    const to = new THREE.Vector3(s * (width + 0.17), -0.36, -0.04)
+    arm(rest, from, to)
+    const g = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 10), trim)
+    g.scale.set(0.95, 1.1, 0.9)
+    g.position.copy(to).add(new THREE.Vector3(s * 0.02, -0.06, 0))
+    g.castShadow = true
+    rest.add(g)
+  }
+  const glove = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 10), trim)
   glove.position.copy(hands)
   glove.castShadow = true
   swing.add(glove)
@@ -331,11 +390,11 @@ export function makeBean(def) {
   const ballAt = new THREE.Vector3(0, 0.05 - shoulder, -stand).sub(hands)
   const len = ballAt.length() - 0.05
   const dir = ballAt.clone().normalize()
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, len, 6), new THREE.MeshStandardMaterial({ color: '#d9dee8', metalness: 0.5, roughness: 0.3 }))
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.021, len, 8), new THREE.MeshStandardMaterial({ color: '#d9dee8', metalness: 0.5, roughness: 0.3 }))
   shaft.position.copy(dir).multiplyScalar(len / 2)
   shaft.quaternion.setFromUnitVectors(up, dir)
   wrist.add(shaft)
-  const head = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.1, 4, 8), new THREE.MeshStandardMaterial({ color: '#3a3f5c', metalness: 0.4, roughness: 0.35 }))
+  const head = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.12, 4, 10), new THREE.MeshStandardMaterial({ color: '#3a3f5c', metalness: 0.4, roughness: 0.35 }))
   head.position.copy(dir).multiplyScalar(len)
   head.rotation.z = Math.PI / 2
   head.castShadow = true
@@ -412,6 +471,10 @@ export function makeBean(def) {
         root.position.set(at.x - c * stand * m, at.y ?? 0, at.z - s * stand * m)
         root.rotation.y = -aim + (m > 0 ? -Math.PI / 2 : Math.PI / 2)
       }
+      // Waiting beans (no club) let their arms hang; the golfer up holds the grip.
+      const holding = !o.at
+      swing.visible = holding
+      rest.visible = !holding
       // The swing: arms take most of it, the wrists cock the club for the rest.
       const d = Math.max(-200, Math.min(270, angle))
       swing.rotation.z = THREE.MathUtils.degToRad(d * 0.6) * m
@@ -461,13 +524,13 @@ export function makeModelBean(kit, def) {
   shape.add(bean.root)
 
   // The club swings from between the shoulders; the hands are on it, the head at the ball.
-  const shoulder = 0.92
-  const front = 0.33
-  const stand = front + 0.46
+  const shoulder = 0.95
+  const front = 0.36
+  const stand = front + 0.58
   const swing = new THREE.Group()
   swing.position.set(0, shoulder, 0)
   lean.add(swing)
-  const hands = new THREE.Vector3(0, 0.5 - shoulder, -(front + 0.16))
+  const hands = new THREE.Vector3(0, 0.6 - shoulder, -(front + 0.24))
   const wrist = new THREE.Group()
   wrist.position.copy(hands)
   swing.add(wrist)
@@ -475,12 +538,12 @@ export function makeModelBean(kit, def) {
   const ballAt = new THREE.Vector3(0, 0.05 - shoulder, -stand).sub(hands)
   const len = ballAt.length() - 0.05
   const dir = ballAt.clone().normalize()
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, len + 0.12, 6), new THREE.MeshStandardMaterial({ color: '#d9dee8', metalness: 0.5, roughness: 0.3 }))
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.021, len + 0.12, 8), new THREE.MeshStandardMaterial({ color: '#d9dee8', metalness: 0.5, roughness: 0.3 }))
   shaft.position.copy(dir).multiplyScalar((len - 0.12) / 2)
   shaft.quaternion.setFromUnitVectors(up, dir)
   shaft.castShadow = true
   wrist.add(shaft)
-  const head = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.1, 4, 8), new THREE.MeshStandardMaterial({ color: '#3a3f5c', metalness: 0.4, roughness: 0.35 }))
+  const head = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.12, 4, 10), new THREE.MeshStandardMaterial({ color: '#3a3f5c', metalness: 0.4, roughness: 0.35 }))
   head.position.copy(dir).multiplyScalar(len)
   head.rotation.z = Math.PI / 2
   head.castShadow = true

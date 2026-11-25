@@ -167,14 +167,17 @@ export function createScenery(scene) {
     if (groundHeight(x, z) > SEA_LEVEL + 0.6) palms.push([x, z, 0.85 + rand() * 0.35, rand() * Math.PI * 2])
   }
   // Flower patches by the tee and along the rough.
-  const patch = (x, z, n) => {
-    for (let i = 0; i < n; i++) flowers.push([x + (rand() - 0.5) * 5, z + (rand() - 0.5) * 3])
+  // Clumped toward each patch's middle (two randoms), so they read as beds, not confetti.
+  const patch = (x, z, n, w = 5, d = 3) => {
+    for (let i = 0; i < n; i++) flowers.push([x + (rand() + rand() - 1) * w * 0.6, z + (rand() + rand() - 1) * d * 0.6])
   }
-  patch(-6, -3, 22)
-  patch(6.5, -2, 22)
+  patch(-6, -3, 40)
+  patch(6.5, -2, 40)
+  patch(-4.5, -7.5, 26, 4, 2.5)
+  patch(5, -7, 26, 4, 2.5)
   for (let z = 30; z < end; z += 45) {
-    patch(-(fairwayHalf(z) + 15), z, 10)
-    patch(fairwayHalf(z) + 15, z + 20, 10)
+    patch(-(fairwayHalf(z) + 15), z, 18)
+    patch(fairwayHalf(z) + 15, z + 20, 18)
   }
   // Trees: one in five is in flower (the coral accent); bushes likewise. Palms sway and flutter.
   // Each kind has a detailed and a cheap version (flora.js): only what's near the camera is detailed.
@@ -197,7 +200,7 @@ export function createScenery(scene) {
     lodInstances(scene, { items: placed(bushes, (b, i) => i % 3 === 1), hi: bushGeometry({ seed: 2, flowering: true }), lo: bushGeometry({ seed: 2, flowering: true, detail: 'low' }), mat: bushMat, tints: ['#ffffff', '#f2ffe4'], near: 45, lightShare: 0 })
   ]
   flora.forEach((f) => f.update(null))
-  const flowerMesh = instance(scene, new THREE.SphereGeometry(0.12, 5, 4), flowers.map(([x, z]) => ({ x, z, s: 0.8 + rand() * 0.6, y: 0.12 })), ['#ff7fae', '#ffe066', '#ffffff', '#c39bff', '#ff9a5a'], new THREE.MeshStandardMaterial({ color: '#ffffff' }))
+  const flowerMesh = instance(scene, blossomGeometry(), flowers.map(([x, z]) => ({ x, z, s: 0.6 + rand() * 0.5, y: 0.18, r: rand() * 6 })), ['#ff7fae', '#ffe066', '#ffffff', '#c39bff', '#ff9a5a'], new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, side: THREE.DoubleSide }))
 
   // ---- the lighthouse point ----------------------------------------------------------------------
   const point = new THREE.Group()
@@ -876,6 +879,32 @@ function sailboat(color) {
   return g
 }
 
+/** The resort's candy colours, for the soft-play dressing (the yardage boards' posts). */
+const CANDY = ['#ff5c8a', '#ffd23f', '#2ad1c9', '#8f6bff', '#ff8a3d']
+
+/** A short candy-striped post with a soft ball on top, at x (parts for merged()). */
+function candyPost(x, seed = 0) {
+  const c = CANDY[(Math.abs(Math.round(x)) + seed / 50) % CANDY.length]
+  return [
+    [new THREE.CapsuleGeometry(0.22, 1.3, 6, 16).translate(x, 0.85, 0), (v) => new THREE.Color(Math.floor((v.y + 0.1) / 0.32) % 2 ? c : '#fff8ec')],
+    [new THREE.SphereGeometry(0.36, 20, 14).translate(x, 1.86, 0), c]
+  ]
+}
+
+/** A five-petal blossom facing up on a short stem, with a pale centre (tinted per copy), about 0.3 m across at full size. */
+function blossomGeometry() {
+  const parts = []
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2
+    const p = new THREE.SphereGeometry(1, 8, 6)
+    p.scale(0.075, 0.03, 0.05).translate(0.075, 0, 0).rotateZ(0.25).rotateY(a)
+    parts.push(paint(p, '#ffffff'))
+  }
+  parts.push(paint(new THREE.SphereGeometry(0.04, 8, 6).scale(1, 0.7, 1).translate(0, 0.02, 0), '#fff2b8'))
+  parts.push(paint(new THREE.CylinderGeometry(0.008, 0.01, 0.14, 5).translate(0, -0.07, 0), '#3f9a3a'))
+  return mergeGeometries(parts)
+}
+
 /** A rounded wooden board on two posts, with the yardage painted on a cream disc. */
 function yardBoard(yd) {
   const cv = document.createElement('canvas')
@@ -899,7 +928,10 @@ function yardBoard(yd) {
     merged([
       [new RoundedBoxGeometry(5.6, 3.6, 0.35, 3, 0.3).translate(0, 4.4, 0), '#c98b4f'],
       [new THREE.CapsuleGeometry(0.2, 2.6, 4, 8).translate(-1.8, 1.4, 0), '#c98b4f'],
-      [new THREE.CapsuleGeometry(0.2, 2.6, 4, 8).translate(1.8, 1.4, 0), '#c98b4f']
+      [new THREE.CapsuleGeometry(0.2, 2.6, 4, 8).translate(1.8, 1.4, 0), '#c98b4f'],
+      // Candy-striped posts either side, with a soft ball on top: the soft-play look.
+      ...candyPost(-3.5, yd),
+      ...candyPost(3.5, yd)
     ])
   )
   const face = new THREE.Mesh(new THREE.PlaneGeometry(5, 3.1), new THREE.MeshStandardMaterial({ map: t, transparent: true }))
@@ -911,18 +943,41 @@ function yardBoard(yd) {
 
 /** Puffy clouds, drifting slowly across the sky; each one shrinks away at the edge of the sky before it wraps round. */
 function addClouds(scene) {
-  const mat = new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#ffffff', emissiveIntensity: 0.4, fog: false })
-  const geo = new THREE.SphereGeometry(1, 12, 8)
+  // Smooth puffs with flat, tucked-under bottoms: bright on top, a soft lavender-blue underneath
+  // (vertex colours, which also tint the glow, so the undersides stay cool).
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, emissive: '#ffffff', emissiveIntensity: 0.45, roughness: 1, fog: false })
+  mat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance *= vColor.rgb;')
+  }
+  mat.customProgramCacheKey = () => 'cloud-under'
+  const geo = new THREE.SphereGeometry(1, 24, 14)
+  {
+    const p = geo.attributes.position
+    const col = new Float32Array(p.count * 3)
+    const top = new THREE.Color('#ffffff')
+    const under = new THREE.Color('#c6cff0')
+    const c = new THREE.Color()
+    for (let i = 0; i < p.count; i++) {
+      let y = p.getY(i)
+      if (y < 0) p.setY(i, (y *= 0.38)) // flat underneath
+      c.copy(under).lerp(top, THREE.MathUtils.smoothstep(y, -0.3, 0.55))
+      col.set([c.r, c.g, c.b], i * 3)
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
+    geo.computeVertexNormals()
+  }
   const puffs = []
   const clouds = []
   const rand = rng(5)
-  for (let ci = 0; ci < 9; ci++) {
+  for (let ci = 0; ci < 11; ci++) {
     const x = (rand() - 0.5) * 1600
     const z = -(300 + rand() * 900)
     const y = 110 + rand() * 120
     const n = 4 + Math.floor(rand() * 3)
     clouds.push({ x, speed: 1.2 + rand() * 1.4 })
-    for (let i = 0; i < n; i++) puffs.push({ cloud: ci, dx: (i - n / 2) * 26, y: y + rand() * 14, z: z + rand() * 20, s: 22 + rand() * 16 })
+    // A row of big puffs along the bottom, smaller ones heaped on top.
+    for (let i = 0; i < n; i++) puffs.push({ cloud: ci, dx: (i - (n - 1) / 2) * 24, y: y + rand() * 4, z: z + rand() * 20, s: 22 + rand() * 12 })
+    for (let i = 0; i < n - 2; i++) puffs.push({ cloud: ci, dx: (i - (n - 3) / 2) * 22 + (rand() - 0.5) * 8, y: y + 12 + rand() * 8, z: z + 4 + rand() * 10, s: 16 + rand() * 10 })
   }
   const mesh = new THREE.InstancedMesh(geo, mat, puffs.length)
   mesh.frustumCulled = false

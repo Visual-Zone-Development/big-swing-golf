@@ -71,8 +71,12 @@ for (const [family, file, weight] of [
   f.load().then((loaded) => document.fonts.add(loaded)).catch(() => {})
 }
 
-const settings = createSettings(ID, { graphics: 'auto', mode: 'practice', strength: 'normal', assist: 'some', hand: 'R', flipFace: false, hints: 'auto' })
-if (settings.data.graphics && settings.data.graphics !== 'auto') view.setGraphics(settings.data.graphics)
+// Graphics: High on a real GPU, Low with none (a software renderer). Saves from before 0.14 may
+// say 'auto', which is that same default now.
+const GRAPHICS_DEFAULT = view.software ? 'low' : 'high'
+const settings = createSettings(ID, { graphics: GRAPHICS_DEFAULT, mode: 'practice', strength: 'normal', assist: 'some', hand: 'R', flipFace: false, hints: 'auto' })
+if (settings.data.graphics !== 'high' && settings.data.graphics !== 'low') settings.data.graphics = GRAPHICS_DEFAULT
+view.setGraphics(settings.data.graphics)
 const ts = () => settings.data.textScale ?? 1
 const head = (px) => `${Math.round(px * ts())}px 'Lilita One', 'Arial Rounded MT Bold', system-ui, sans-serif`
 const body = (px, w = 700) => `${w} ${Math.round(px * ts())}px Rubik, system-ui, sans-serif`
@@ -217,7 +221,7 @@ const settingsScreen = createSettingsScreen({
   audio,
   width: 600, // the clubhouse look: a column of tiles, with the card beside it (drawSettings)
   extra: [
-    { id: 'graphics', label: 'Graphics', type: 'choice', value: settings.data.graphics ?? 'auto', options: [{ value: 'auto', label: 'Auto' }, { value: 'high', label: 'High' }, { value: 'low', label: 'Low' }], onChange: (v) => view.setGraphics(v) },
+    { id: 'graphics', label: 'Graphics', type: 'choice', value: settings.data.graphics, options: [{ value: 'high', label: 'High' }, { value: 'low', label: 'Low' }], onChange: (v) => view.setGraphics(v) },
     { id: 'strength', label: 'Swing power needed', type: 'choice', value: settings.data.strength, options: [{ value: 'easy', label: 'Less' }, { value: 'normal', label: 'Normal' }, { value: 'strong', label: 'More' }] },
     { id: 'assist', label: 'Straight shot help', type: 'choice', value: settings.data.assist, options: [{ value: 'off', label: 'Off' }, { value: 'some', label: 'Some' }, { value: 'lots', label: 'Lots' }] },
     { id: 'flipFace', label: 'Flip hook and slice', type: 'toggle', value: settings.data.flipFace },
@@ -244,6 +248,7 @@ function layout() {
   H = fit.h
   DY = Math.round((H - MIN_H) / 2)
   view.resize(W, H)
+  view.setSharpness(fit.scale * fit.dpr) // High: as many pixels as the screen shows
   Object.assign(PAUSE_BUTTON, { x: W - 88, y: 32 })
   Object.assign(TOUCH.aimL, { x: 40, y: H - 110 })
   Object.assign(TOUCH.aimR, { x: 124, y: H - 110 })
@@ -1479,7 +1484,7 @@ const SETTING_TEXT = {
   sfx: 'Swishes, cracks, splashes and cheers.',
   reducedShake: 'Keeps the camera steadier on the big moments.',
   textScale: 'Bigger words on the TV, for the back of the room.',
-  graphics: 'Auto picks for this machine. Low runs smoother on slow ones; High is the full look, with soft shadows and swaying grass.',
+  graphics: 'High is the full look at your screen\'s own sharpness, with soft shadows and swaying grass. Low runs smoother on slow machines.',
   strength: 'How hard you swing for a full shot. Less suits kids, small rooms and gentle swingers.',
   assist: 'How much the game straightens your hooks and slices, and reads the putts for you.',
   flipFace: 'If your slices curve the wrong way on your phone, turn this on.',

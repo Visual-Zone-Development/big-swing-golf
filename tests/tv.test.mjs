@@ -495,7 +495,8 @@ test('outside the launcher the title has no Quit tile: a browser tab can’t clo
 
 test('Graphics: Low is light mode, and High asks for full quality even on a machine with no GPU', async () => {
   const t = await tv()
-  assert.equal(await t.state(() => window.__game.view.light), true) // no GPU here: Auto picks light
+  assert.equal(await t.state(() => window.__game.settings.data.graphics), 'low') // no GPU here: Low by default
+  assert.equal(await t.state(() => window.__game.view.light), true)
   await t.page.evaluate(() => window.__game.view.setGraphics('high'))
   assert.equal(await t.state(() => window.__game.view.light), false)
   assert.equal(await t.state(() => window.__game.view.lighting.low), false)
@@ -503,6 +504,43 @@ test('Graphics: Low is light mode, and High asks for full quality even on a mach
   assert.equal(await t.state(() => window.__game.view.light), true)
   assert.equal(await t.state(() => window.__game.view.lighting.low), true)
   assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
+/** Make the browser's software renderer report a real GPU, so the game sees one. */
+const realGpu = () => {
+  for (const C of [WebGLRenderingContext, WebGL2RenderingContext]) {
+    const get = C.prototype.getParameter
+    C.prototype.getParameter = function (p) {
+      return p === 0x9246 || p === this.RENDERER ? 'ANGLE (NVIDIA GeForce RTX 3060)' : get.call(this, p)
+    }
+  }
+}
+
+test('on a machine with a GPU, Graphics starts on High, and a save that said Auto moves to High', async () => {
+  for (const saved of [null, 'auto']) {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+    await page.addInitScript(realGpu)
+    if (saved) await page.addInitScript((g) => localStorage.setItem('big-swing-golf-settings-v1', JSON.stringify({ graphics: g })), saved)
+    await page.goto(base)
+    await page.waitForFunction(() => window.__game?.state?.screen === 'title')
+    await page.evaluate(() => (window.__game.view.renderer.render = () => {}))
+    assert.equal(await page.evaluate(() => window.__game.settings.data.graphics), 'high', `saved: ${saved}`)
+    assert.equal(await page.evaluate(() => window.__game.view.light), false)
+    assert.deepEqual(await page.evaluate(() => window.__game.settingsMenu.items.find((i) => i.id === 'graphics').options.map((o) => o.value)), ['high', 'low'])
+    await page.close()
+  }
+})
+
+test('High draws at the screen\u2019s own sharpness (a 2× screen gets twice the pixels, a 4K TV is capped), Low at half', async () => {
+  const t = await tv()
+  await t.page.evaluate(() => window.__game.view.setGraphics('high'))
+  await t.page.evaluate(() => window.__game.view.setSharpness(2))
+  assert.equal(await t.state(() => window.__game.view.renderer.getPixelRatio()), 2)
+  await t.page.evaluate(() => window.__game.view.setSharpness(3)) // 4K: no more than 2560 pixels across
+  assert.equal(await t.state(() => window.__game.view.renderer.getPixelRatio()), 2560 / 1280)
+  await t.page.evaluate(() => window.__game.view.setGraphics('low'))
+  assert.equal(await t.state(() => window.__game.view.renderer.getPixelRatio()), 0.5)
   await t.page.close()
 })
 

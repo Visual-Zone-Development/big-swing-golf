@@ -25,16 +25,19 @@ const H = 800
 const toV = (p, v = new THREE.Vector3()) => v.set(p.x, p.y, -p.z)
 const WHITE = new THREE.Color('#ffffff')
 
-export function createView(canvas, { width = W, height = H, preserve = false, full = false, beans = './beans/', props = './resort/', graphics: graphicsSetting = 'auto' } = {}) {
-  let graphics = graphicsSetting
+export function createView(canvas, { width = W, height = H, preserve = false, full = false, beans = './beans/', props = './resort/' } = {}) {
   // No GPU (a software renderer): skip anti-aliasing, which multiplies every pixel's cost there.
   // full: always full detail, however slow (the art preview renders a single frame).
   const software = !full && softwareGpu()
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: !software, powerPreference: 'high-performance', preserveDrawingBuffer: preserve })
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1))
   // The view's size follows the screen's shape (fitCanvas fill): resize() keeps it in step.
   let vw = width
   let vh = height
+  // High draws at the screen's own resolution (setSharpness: CSS scale × device pixels), so a
+  // 1080p or 4K TV isn't looking at a stretched 1422×800 picture; capped at 2560 pixels across.
+  let sharp = 1
+  const fullRatio = () => Math.max(1, Math.min(sharp, 2560 / vw))
+  renderer.setPixelRatio(1)
   renderer.setSize(vw, vh, false)
   renderer.toneMapping = THREE.ACESFilmicToneMapping
   renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -46,27 +49,30 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
 
   // ---- light ----------------------------------------------------------------------------------
   // lighting.js: sky light, sun with shadows that follow the action, fill, rim, and (High) the
-  // finishing stack. graphics: 'auto' (High on a GPU, Low on a software renderer or slow frames),
-  // 'high' or 'low' (the Graphics setting).
-  const lighting = createLighting(renderer, scene, { low: software || graphics === 'low' })
+  // finishing stack. Low on a software renderer until the Graphics setting says otherwise.
+  const lighting = createLighting(renderer, scene, { low: software })
 
   // ---- quality -----------------------------------------------------------------------------------
-  // Full detail on a real GPU (the Deck included). A software renderer (no GPU, like a build
-  // server) or frames that keep coming slower than 30 a second switch to light mode: half the
-  // pixels, no shadows, fewer small things. Once light, it stays light.
+  // Graphics High (the default on a real GPU, the Deck included): full detail at the screen's
+  // resolution, and it stays that way however slow the frames. Low (the default with no GPU,
+  // like a build server, or picked in Settings) is light mode: half the pixels, no shadows,
+  // fewer small things, the hand-built beans.
   let light = false
   const golfers = new Map() // look id → makeBean() / makeModelBean()
   const blobGeo = new THREE.CircleGeometry(0.55, 24).rotateX(-Math.PI / 2)
   const blobMat = new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false, opacity: 0.5, color: '#203018' })
   let kit = null // the shared bean kit, once loaded (see below)
   const forceModels = typeof location !== 'undefined' && new URLSearchParams(location.search).has('models')
-  let slowFor = 0
-  let lastDraw = 0
+  /** Light mode draws half the pixels; High, the screen's own (fullRatio). */
+  const applyRatio = () => {
+    renderer.setPixelRatio(light ? 0.5 : fullRatio())
+    renderer.setSize(vw, vh, false)
+    lighting.resize(vw, vh)
+  }
   const goLight = () => {
     if (light) return
     light = true
-    renderer.setPixelRatio(0.5)
-    renderer.setSize(vw, vh, false)
+    applyRatio()
     lighting.setLow(true)
     scenery?.setLight(true)
     // Back to the hand-built beans (rebuilt on the next frame).
@@ -243,13 +249,6 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
   let lastMode = ''
   function draw(o) {
     clock += o.dt
-    const now = performance.now()
-    const real = lastDraw ? (now - lastDraw) / 1000 : 0
-    lastDraw = now
-    if (real > 0 && real < 2 && o.mode !== 'fixed') {
-      slowFor = real > 1 / 30 ? slowFor + real : Math.max(0, slowFor - real * 0.5)
-      if (slowFor > 1.5 && !full && graphics !== 'high') goLight()
-    }
     const aimRad = ((o.aim ?? 0) * Math.PI) / 180
     const sin = Math.sin(aimRad)
     const cos = Math.cos(aimRad)
@@ -514,22 +513,26 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
       if (w === vw && h === vh) return
       vw = w
       vh = h
-      renderer.setSize(vw, vh, false)
+      applyRatio()
       camera.aspect = vw / vh
       camera.updateProjectionMatrix()
       trailMat.resolution.set(vw, vh)
-      lighting.resize(vw, vh)
     },
-    /** The Graphics setting: 'auto' | 'high' | 'low'. Low is light mode; High and Auto start full. */
+    /** No GPU (a software renderer): the Graphics setting starts on Low here. */
+    software,
+    /** Screen pixels per game unit (the canvas's CSS scale × device pixels): High draws that many. */
+    setSharpness(k) {
+      if (Math.abs(k - sharp) < 0.01) return
+      sharp = k
+      applyRatio()
+    },
+    /** The Graphics setting: 'high' (full detail) | 'low' (light mode). */
     setGraphics(g) {
-      graphics = g
       if (g === 'low') goLight()
-      else if (light && (g === 'high' || !software)) {
+      else if (light) {
         // Back up to full detail (a reload of the light mode's choices).
         light = false
-        slowFor = 0
-        renderer.setPixelRatio(Math.min(devicePixelRatio, 1))
-        renderer.setSize(vw, vh, false)
+        applyRatio()
         lighting.setLow(false)
         scenery?.setLight(false)
       }

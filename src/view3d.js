@@ -13,6 +13,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
 import { TUNING, YD } from './tuning.js'
 import { makeBean, makeModelBean } from './characters.js'
 import { addProps, createScenery } from './scenery.js'
+import { clothMaterial, pennantGeometry } from './cloth.js'
 import { loadBeans } from './beans/beans.js'
 import { GREEN, puttHeight } from './putting.js'
 import { groundHeight } from './terrain.js'
@@ -165,7 +166,7 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
   const hole = new THREE.Mesh(new THREE.CircleGeometry(cupR, 28).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#10240c', polygonOffset: true, polygonOffsetFactor: -2 }))
   const liner = new THREE.Mesh(new THREE.RingGeometry(cupR, cupR + 0.025, 28).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#ffffff', polygonOffset: true, polygonOffsetFactor: -2 }))
   const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 2.3, 8, 6).translate(0, 1.15, 0), new THREE.MeshLambertMaterial({ color: '#fff8ec' }))
-  const pin = new THREE.Mesh(new THREE.ShapeGeometry(pennant(), 4), new THREE.MeshLambertMaterial({ color: '#ff5c8a', side: THREE.DoubleSide }))
+  const pin = new THREE.Mesh(pennantGeometry(0.55, 0.34, 8, 3), clothMaterial({ color: '#ff5c8a' }, 0.55))
   pin.position.y = 2.25
   // The hole and its liner lie on the green's slope (the stick stays upright): laid flat, the
   // uphill half of the hole sank into a sloping green.
@@ -351,7 +352,7 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
         g.pose({ at: { x, y: groundHeight(x, z), z: -z, face: -1.2 - d }, dt: o.dt, face: def.face ?? 'idle', gaze: o.ball ? watch : null })
       } else g.pose({ at: { x: WAIT[i].x, z: WAIT[i].z, face: -1.2 }, dt: o.dt, face: def.face ?? 'idle', gaze: o.ball ? watch : null })
     })
-    scenery.update(o.dt, o.lit ?? -1)
+    scenery.update(o.dt, o.lit ?? -1, camera.position)
     // Ball
     const b = o.ball ?? { x: tee.x, y: teeY + 0.13, z: tee.z }
     toV(b, ball.position)
@@ -634,15 +635,6 @@ const puttWait = (G, i) => ({ x: G.x - G.rx * 1.25 - (i % 2) * 1.2, z: -(G.z - 3
 /** A putt's ball and line: the ball's spot and the aim's sine and cosine. */
 function puttFrame(P, b) {
   return { bx: b.x, by: b.y ?? 0, bz: b.z, s: Math.sin(P.dir), c: Math.cos(P.dir) }
-}
-
-/** The flagstick's little pennant. */
-function pennant() {
-  const tri = new THREE.Shape()
-  tri.moveTo(0, 0)
-  tri.lineTo(0.55, -0.16)
-  tri.lineTo(0, -0.34)
-  return tri
 }
 
 /** A software renderer (SwiftShader, llvmpipe): there's no GPU, so every pixel costs. */

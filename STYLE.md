@@ -15,8 +15,34 @@ The look the art-direction, environments and lighting passes work to. The concep
 ## Environment style: the resort
 - **Camera:** behind the golfer at address, chasing the ball, looking down where it lands; low and behind on the green; the crew beside the rail on the title.
 - **Depth:** haze toward the horizon colour from 150 m to 950 m; the hills, the sea and the lighthouse point fade into it.
-- **Life:** tufts sway, flags flutter, boats bob, the crew blinks, breathes and watches the ball; reactions are hops, spins, flinches and droops.
-- **Dressing:** tufts thick in the rough near the tee and around the greens, thinning downrange; flowers in patches by the tee; beach huts in a row on the dunes; rocks along the waterline.
+- **Life:** one breeze sways the tree crowns and bushes and flutters the palm fronds (each instance at its own phase), the tufts sway, flags ripple from the pole to the tip, clouds drift, gulls wheel over the beach and flap in bursts between glides, the sea's foam laps and its waves glint, boats bob, the crew blinks, breathes and watches the ball; reactions are hops, spins, flinches and droops.
+- **Dressing:** tufts thick in the rough near the tee and around the greens, thinning downrange; flowers in patches by the tee; beach huts in a row on the dunes; rocks along the waterline; one tree in five and one bush in three in flower.
+- **Sea:** shallow `#56dccf` over the sand, `#1f9fd6` (the sea colour) further out, deep `#1670c4` offshore; white foam at the waterline about 2 m wide, a surf line rolling in behind it.
+
+## Forms (pushplay-kit's model-asset rules)
+Nothing in the resort is a bare sphere, box or cylinder: taper, flare, lump or round it; three or more overlapping parts; a darker trim and one accent.
+
+| Asset | File | Built as | Accent |
+|---|---|---|---|
+| Broadleaf tree (8.5 m) | `src/flora.js` `treeGeometry` | trunk lofted, flared at the root (r 0.8 → 0.24 m), leaning 0.36 m; three tapered branches; eight lumpy clusters (r 1.15–2.3 m), each shaded as a ball: leaf `#24702f` → `#9be063` | coral `#ff6f86` / pale pink blossoms on one tree in five |
+| Coconut palm (9 m) | `src/flora.js` `palmGeometry` | curving trunk, flared at the foot, scalloped rings every 0.45 m (`#7f5532` grooves, `#d1a066` ridges); nine fronds 4.4–5.3 m, folded along a `#b9dc66` midrib, serrated leaflets `#237f3a` → `#6fcc4e` | four coconuts |
+| Bush (1.4 m) | `src/flora.js` `bushGeometry` | five lumpy clusters, flatter than the trees' | red / yellow hibiscus dots on one in three |
+| Pennant | `src/cloth.js` | a curved grid that ripples, deepest at the tip (12 % of its length) | — |
+| Gull (1.3 m across) | `src/gulls.js` | lofted body, inner wing and swept grey tip as thin slabs | yellow beak |
+
+Far copies use each piece's `detail: 'low'` version (the five biggest clusters, no branches, painted rings); the detailed version is drawn within 70 m of the camera (bushes 45 m).
+
+## Animation
+Timing for the beans' reactions (`REACTIONS` in `src/reactions.js`); gravity in the air is 16 m/s², a little floatier than real.
+
+| Reaction | Timing |
+|---|---|
+| Cheer (1.6 s) | crouch 0.14 s to 86 %; hop 0.42 m with a full spin over 1.3 × its air time; landing squash to 80 % in 0.11 s; a second hop 0.16 m; spring back over 0.4 s with a small overshoot |
+| Happy (1.2 s) | crouch 0.1 s; one 0.2 m hop; squash to 88 %; spring back |
+| Sad (2 s) | droop 12 % and tilt forward 0.25 rad over 0.35 s (ease out), a slow sigh, back over 0.4 s (ease in-out) |
+| Wince (1.6 s) | flinch 7 % and lean back 0.12 rad in 0.08 s, a tremble that dies within 0.5 s, back over 0.5 s |
+
+Take-off blends out of the crouch over 0.1 s, the stretch is up to 14 % and follows the speed; nothing dips below the ground and every reaction ends exactly at rest. Ambient motion: breeze sway 0.9 Hz with gusts, frond flutter 3.1 Hz, flag wave 7 rad/s travelling to the tip, gull wingbeat about 1.4 Hz in bursts.
 
 ## Faces
 3D eyes on every sculpted bean: eyeballs with pupils and a shine, lids in the bean's colour, brows as soft dark bars; a painted mouth. The ten expressions and their eye settings are `EXPRESSIONS` in the shared bean kit (`shared/beans/beans.js`); the mouths are in `faces.js`. Expressions ease into each other; blinks are instant; shut eyes squeeze into slits.

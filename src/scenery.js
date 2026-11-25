@@ -14,6 +14,10 @@ import { COAST, HILLS, shoreDistance } from './links.js'
 import { GREEN, greenReach, puttHeight, slopeAt } from './putting.js'
 import { createTufts, grassMaterial, grassUVs, setGrassDetail } from './grass.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { createSea } from './sea.js'
+import { createGulls } from './gulls.js'
+import { clothMaterial, pennantGeometry } from './cloth.js'
+import { bushGeometry, lodInstances, palmGeometry, swayMaterial, treeGeometry, wind } from './flora.js'
 
 export const COLORS = {
   skyTop: '#2f86ee',
@@ -120,10 +124,9 @@ export function createScenery(scene) {
   scene.add(yardLines)
 
   // ---- sea ---------------------------------------------------------------------------------------
-  const sea = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), new THREE.MeshStandardMaterial({ color: COLORS.sea, roughness: 0.16, metalness: 0.05, transparent: true, opacity: 0.86 }))
-  sea.rotation.x = -Math.PI / 2
-  sea.position.set(0, SEA_LEVEL, -600)
-  scene.add(sea)
+  // sea.js: clear over the sand, deep offshore, foam lapping at the waterline, glinting waves.
+  const sea = createSea()
+  scene.add(sea.mesh)
   // Far islands, soft in the haze.
   const islands = []
   for (const [x, z, r, h] of [
@@ -173,9 +176,27 @@ export function createScenery(scene) {
     patch(-(fairwayHalf(z) + 15), z, 10)
     patch(fairwayHalf(z) + 15, z + 20, 10)
   }
-  const treeMesh = instance(scene, treeGeometry(), trees.map(([x, z, s]) => ({ x, z, s, r: rand() * 6 })), ['#ffffff', '#e9ffd9', '#fff4d6', '#dff7ff'])
-  instance(scene, palmGeometry(), palms.map(([x, z, s, r]) => ({ x, z, s, r })), ['#ffffff', '#f2ffe6'])
-  const bushMesh = instance(scene, bushGeometry(), bushes.map(([x, z, s]) => ({ x, z, s, r: rand() * 6 })), ['#ffffff', '#e8ffe0', '#f0ffd0'])
+  // Trees: one in five is in flower (the coral accent); bushes likewise. Palms sway and flutter.
+  // Each kind has a detailed and a cheap version (flora.js): only what's near the camera is detailed.
+  const placed = (list, f) => list.map(([x, z, sc, r]) => ({ x, y: groundHeight(x, z) - 0.1, z: -z, s: sc, r: r ?? rand() * 6 })).filter(f ?? (() => true))
+  const treeMat = swayMaterial({ from: 3, to: 8.5, amp: 0.14 })
+  const isFlowering = (_, i) => i % 5 === 2
+  const bushMat = swayMaterial({ from: 0.3, to: 1.6, amp: 0.03 })
+  const palmMat = swayMaterial({ from: 5, to: 9, amp: 0.1, flutter: 0.05, centre: [3.2, 0], side: THREE.DoubleSide })
+  const flora = [
+    lodInstances(scene, { items: placed(trees, (t, i) => !isFlowering(t, i)), hi: treeGeometry({ seed: 1 }), lo: treeGeometry({ seed: 1, detail: 'low' }), mat: treeMat, tints: ['#ffffff', '#ecffdf', '#fff6dc', '#e2f7ff'], lightShare: 0.6 }),
+    lodInstances(scene, { items: placed(trees, isFlowering), hi: treeGeometry({ seed: 2, flowering: true }), lo: treeGeometry({ seed: 2, flowering: true, detail: 'low' }), mat: treeMat, tints: ['#ffffff', '#f4ffe8'], lightShare: 0.6 }),
+    lodInstances(scene, {
+      items: placed(palms),
+      hi: palmGeometry(),
+      lo: palmGeometry({ detail: 'low' }),
+      mat: palmMat,
+      tints: ['#ffffff', '#f2ffe6', '#fffbe8']
+    }),
+    lodInstances(scene, { items: placed(bushes, (b, i) => i % 3 !== 1), hi: bushGeometry({ seed: 1 }), lo: bushGeometry({ seed: 1, detail: 'low' }), mat: bushMat, tints: ['#ffffff', '#ecffe4', '#f4ffd8'], near: 45, lightShare: 0 }),
+    lodInstances(scene, { items: placed(bushes, (b, i) => i % 3 === 1), hi: bushGeometry({ seed: 2, flowering: true }), lo: bushGeometry({ seed: 2, flowering: true, detail: 'low' }), mat: bushMat, tints: ['#ffffff', '#f2ffe4'], near: 45, lightShare: 0 })
+  ]
+  flora.forEach((f) => f.update(null))
   const flowerMesh = instance(scene, new THREE.SphereGeometry(0.12, 5, 4), flowers.map(([x, z]) => ({ x, z, s: 0.8 + rand() * 0.6, y: 0.12 })), ['#ff7fae', '#ffe066', '#ffffff', '#c39bff', '#ff9a5a'], new THREE.MeshStandardMaterial({ color: '#ffffff' }))
 
   // ---- the lighthouse point ----------------------------------------------------------------------
@@ -211,10 +232,19 @@ export function createScenery(scene) {
     boats.push(b)
   }
 
-  addClouds(scene)
+  const clouds = addClouds(scene)
+  // Gulls wheeling over the beach and the far shore.
+  const gulls = createGulls(scene, [
+    { x: fairwayHalf(60) + 70, z: 60, y: 22, r: 22 },
+    { x: fairwayHalf(90) + 85, z: 95, y: 27, r: 30 },
+    { x: fairwayHalf(140) + 75, z: 140, y: 19, r: 18 },
+    { x: fairwayHalf(end) + 40, z: end + 60, y: 30, r: 34 },
+    { x: -30, z: end + 90, y: 26, r: 26 }
+  ])
 
   // ---- the course: its fairways, traps, trees and buildings -----------------------------------------
-  courseScenery(scene)
+  // The course's own trees, palms and bushes share the range's materials, detail levels and breeze.
+  flora.push(...courseScenery(scene, { treeMat, bushMat, palmMat }))
 
   // ---- the tee ---------------------------------------------------------------------------------
   // One at the range's tee and at every hole's: a rounded mown box, a tee peg and two big glossy
@@ -362,19 +392,23 @@ export function createScenery(scene) {
       tufts.mesh.visible = !light
       fringeTufts.mesh.visible = !light
       ringTufts.mesh.visible = !light
-      bushMesh.visible = !light
-      treeMesh.count = light ? Math.ceil(trees.length * 0.6) : trees.length
+      flora.forEach((f) => f.setLight(light)) // fewer trees, no bushes, all of them the cheap version
     },
-    /** Animate: flags wave (the lit green glows), boats bob, the lighthouse lamp pulses. */
-    update(dt, lit = -1) {
+    /** Animate (camera: its position, for the trees' detail): the breeze (trees, palms, flags), the sea, boats bob, the lit green's flag glows, the lighthouse lamp pulses. */
+    update(dt, lit = -1, camera = null) {
       clock += dt
+      flora.forEach((f) => f.update(camera))
+      wind.value = clock
+      sea.update(dt)
+      clouds.update(clock)
+      gulls.update(dt)
       tufts.update(dt)
       fringeTufts.update(dt)
       ringTufts.update(dt)
       greens.children.forEach((g, i) => {
         const f = g.userData.flag
         if (!f) return
-        f.rotation.y = Math.sin(clock * 2.2 + i) * 0.3
+        f.rotation.y = Math.sin(clock * 0.6 + i) * 0.15 // the breeze veers a little
         f.material.emissive.set(lit === i ? '#ffffff' : '#000000')
         f.material.emissiveIntensity = lit === i ? 0.35 + 0.25 * Math.sin(clock * 10) : 0
       })
@@ -413,7 +447,7 @@ function landMesh(w, d, sw, sd, cx, cz) {
     if (s === 'range') c.set(COLORS.rough)
     else if (s === 'hill') c.copy(lo).lerp(hi, Math.min(1, Math.max(0, h / 22)))
     else if (h > SEA_LEVEL + 0.35) c.set(h < SEA_LEVEL + 0.9 ? COLORS.wetSand : COLORS.sand)
-    else if (h > SEA_LEVEL - 0.05) c.set(COLORS.foam)
+    else if (h > SEA_LEVEL - 0.05) c.set(COLORS.wetSand) // the sea's own foam laps over this
     else c.set(COLORS.seabed).lerp(deep, Math.min(1, (SEA_LEVEL - h) / 3))
     // A little variation so big areas don't look flat.
     const n = 1 + 0.04 * Math.sin(x * 0.31) * Math.sin(z * 0.27)
@@ -527,7 +561,7 @@ function sandTexture() {
  * aprons, bunkers and beaches, the pond, trees on the hills and down the third hole's valley,
  * palms along the shore, the lighthouse on the headland and the clubhouse.
  */
-function courseScenery(scene) {
+function courseScenery(scene, mats) {
   const rand = rng(53)
   // Fairways: a ribbon along each hole's line, round at the ends and the bend; an apron round each green.
   const mownParts = []
@@ -632,13 +666,17 @@ function courseScenery(scene) {
       if (shoreDistance(x, z) > 9 && clear(x, z, 9)) palms.push([x, z, 0.85 + rand() * 0.35, rand() * Math.PI * 2])
     }
   }
-  for (const mesh of [
-    instance(scene, treeGeometry(), trees.map(([x, z, sc]) => ({ x, z, s: sc, r: rand() * 6 })), ['#ffffff', '#e9ffd9', '#fff4d6', '#dff7ff']),
-    instance(scene, palmGeometry(), palms.map(([x, z, sc, r]) => ({ x, z, s: sc, r })), ['#ffffff', '#f2ffe6']),
-    instance(scene, bushGeometry(), bushes.map(([x, z, sc]) => ({ x, z, s: sc, r: rand() * 6 })), ['#ffffff', '#e8ffe0', '#f0ffd0'])
-  ]) {
-    mesh.castShadow = true
-  }
+  // Detailed near the camera, cheap further away (flora.js); one in five trees and bushes in flower.
+  const placed = (list, f) => list.map(([x, z, sc, r]) => ({ x, y: groundHeight(x, z) - 0.1, z: -z, s: sc, r: r ?? rand() * 6 })).filter(f ?? (() => true))
+  const flowering = (_, i) => i % 5 === 2
+  const flora = [
+    lodInstances(scene, { items: placed(trees, (t, i) => !flowering(t, i)), hi: treeGeometry({ seed: 3 }), lo: treeGeometry({ seed: 3, detail: 'low' }), mat: mats.treeMat, tints: ['#ffffff', '#ecffdf', '#fff6dc', '#e2f7ff'], lightShare: 0.6 }),
+    lodInstances(scene, { items: placed(trees, flowering), hi: treeGeometry({ seed: 2, flowering: true }), lo: treeGeometry({ seed: 2, flowering: true, detail: 'low' }), mat: mats.treeMat, tints: ['#ffffff', '#f4ffe8'], lightShare: 0.6 }),
+    lodInstances(scene, { items: placed(palms), hi: palmGeometry(), lo: palmGeometry({ detail: 'low' }), mat: mats.palmMat, tints: ['#ffffff', '#f2ffe6', '#fffbe8'] }),
+    lodInstances(scene, { items: placed(bushes, (b, i) => i % 3 !== 1), hi: bushGeometry({ seed: 1 }), lo: bushGeometry({ seed: 1, detail: 'low' }), mat: mats.bushMat, tints: ['#ffffff', '#ecffe4', '#f4ffd8'], near: 45, lightShare: 0 }),
+    lodInstances(scene, { items: placed(bushes, (b, i) => i % 3 === 1), hi: bushGeometry({ seed: 2, flowering: true }), lo: bushGeometry({ seed: 2, flowering: true, detail: 'low' }), mat: mats.bushMat, tints: ['#ffffff', '#f2ffe4'], near: 45, lightShare: 0 })
+  ]
+  flora.forEach((f) => f.update(null))
 
   // The lighthouse on the headland's tip, on a low rocky base.
   const tip = new THREE.Group()
@@ -668,6 +706,7 @@ function courseScenery(scene) {
     o.receiveShadow = true
   })
   scene.add(house)
+  return flora
 }
 
 /**
@@ -778,54 +817,6 @@ function instance(scene, geo, items, tints, mat = new THREE.MeshStandardMaterial
   return mesh
 }
 
-/** A puffy tree: a short trunk and a crown of soft balls, darker underneath. */
-function treeGeometry() {
-  const leafLo = new THREE.Color('#2f8f3a')
-  const leafHi = new THREE.Color('#7fd65a')
-  const leaf = (v) => leafLo.clone().lerp(leafHi, Math.min(1, Math.max(0, (v.y - 3.2) / 4)))
-  const trunk = paint(at(new THREE.CylinderGeometry(0.38, 0.6, 4.2, 7), 0, 2.1, 0), '#9b6a3e')
-  const crown = [
-    [0, 5.4, 0, 2.5],
-    [1.7, 4.8, 0.5, 1.8],
-    [-1.6, 4.9, -0.4, 1.9],
-    [0.3, 6.9, 0.2, 1.8],
-    [-0.4, 4.7, 1.5, 1.6],
-    [0.6, 4.6, -1.5, 1.6]
-  ].map(([x, y, z, r]) => paint(at(new THREE.SphereGeometry(1, 7, 5), x, y, z, r), leaf))
-  return mergeGeometries([trunk, ...crown])
-}
-
-/** A palm: a curved, ringed trunk and drooping fronds, with coconuts. */
-function palmGeometry() {
-  const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.6, 3, 0), new THREE.Vector3(1.8, 6, 0), new THREE.Vector3(3.2, 8.4, 0)])
-  const trunk = paint(new THREE.TubeGeometry(curve, 10, 0.32, 6), (v) => new THREE.Color(Math.round(v.y * 2.2) % 2 ? '#b07a45' : '#c48d55'))
-  const top = curve.getPoint(1)
-  const parts = [trunk]
-  for (let i = 0; i < 7; i++) {
-    const a = (i / 7) * Math.PI * 2
-    const f = new THREE.SphereGeometry(1, 6, 3)
-    f.scale(2.6, 0.13, 0.55).translate(2.2, -0.35, 0)
-    f.rotateZ(-0.35 - (i % 2) * 0.15)
-    f.rotateY(a)
-    f.translate(top.x, top.y, top.z)
-    parts.push(paint(f, (v) => new THREE.Color('#2f9e44').lerp(new THREE.Color('#7fd65a'), Math.min(1, Math.max(0, v.y - top.y + 1.2) / 1.4))))
-  }
-  for (let i = 0; i < 3; i++) parts.push(paint(at(new THREE.SphereGeometry(0.28, 8, 6), top.x + Math.cos(i * 2.1) * 0.35, top.y - 0.35, Math.sin(i * 2.1) * 0.35), '#6b4a2b'))
-  return mergeGeometries(parts)
-}
-
-function bushGeometry() {
-  const leaf = (v) => new THREE.Color('#3a9d3f').lerp(new THREE.Color('#86d95e'), Math.min(1, Math.max(0, v.y / 1.4)))
-  return mergeGeometries(
-    [
-      [0, 0.6, 0, 0.9],
-      [0.8, 0.45, 0.2, 0.65],
-      [-0.75, 0.45, -0.1, 0.7],
-      [0.1, 0.4, 0.75, 0.6]
-    ].map(([x, y, z, r]) => paint(at(new THREE.SphereGeometry(1, 6, 4), x, y, z, r), leaf))
-  )
-}
-
 function flagPole(color) {
   const group = new THREE.Group()
   // A striped pole and a gold knob: one mesh.
@@ -838,11 +829,8 @@ function flagPole(color) {
   )
   pole.castShadow = true
   group.add(pole)
-  const tri = new THREE.Shape()
-  tri.moveTo(0, 0)
-  tri.quadraticCurveTo(1.8, 0.2, 3.4, -0.95)
-  tri.quadraticCurveTo(1.8, -1.6, 0, -1.9)
-  const flag = new THREE.Mesh(new THREE.ShapeGeometry(tri, 8), new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide, emissive: '#000000' }))
+  // A cloth pennant (cloth.js): it ripples from the pole to the tip.
+  const flag = new THREE.Mesh(pennantGeometry(3.4, 1.9), clothMaterial({ color, emissive: '#000000' }, 3.4))
   flag.position.y = 6.9
   group.add(flag)
   return { group, flag }
@@ -921,27 +909,40 @@ function yardBoard(yd) {
   return grp
 }
 
+/** Puffy clouds, drifting slowly across the sky; each one shrinks away at the edge of the sky before it wraps round. */
 function addClouds(scene) {
   const mat = new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#ffffff', emissiveIntensity: 0.4, fog: false })
   const geo = new THREE.SphereGeometry(1, 12, 8)
   const puffs = []
+  const clouds = []
   const rand = rng(5)
   for (let ci = 0; ci < 9; ci++) {
     const x = (rand() - 0.5) * 1600
     const z = -(300 + rand() * 900)
     const y = 110 + rand() * 120
     const n = 4 + Math.floor(rand() * 3)
-    for (let i = 0; i < n; i++) puffs.push([x + (i - n / 2) * 26, y + rand() * 14, z + rand() * 20, 22 + rand() * 16])
+    clouds.push({ x, speed: 1.2 + rand() * 1.4 })
+    for (let i = 0; i < n; i++) puffs.push({ cloud: ci, dx: (i - n / 2) * 26, y: y + rand() * 14, z: z + rand() * 20, s: 22 + rand() * 16 })
   }
   const mesh = new THREE.InstancedMesh(geo, mat, puffs.length)
+  mesh.frustumCulled = false
   const d = new THREE.Object3D()
-  puffs.forEach(([x, y, z, s], i) => {
-    d.position.set(x, y, z)
-    d.scale.set(s, s * 0.65, s * 0.8)
-    d.updateMatrix()
-    mesh.setMatrixAt(i, d.matrix)
-  })
+  const EDGE = 900
+  const place = (t) => {
+    puffs.forEach((p, i) => {
+      const c = clouds[p.cloud]
+      const cx = ((((c.x + t * c.speed + EDGE) % (2 * EDGE)) + 2 * EDGE) % (2 * EDGE)) - EDGE
+      const k = 1 - THREE.MathUtils.smoothstep(Math.abs(cx), EDGE - 160, EDGE)
+      d.position.set(cx + p.dx, p.y, p.z)
+      d.scale.set(p.s * k + 1e-3, p.s * 0.65 * k + 1e-3, p.s * 0.8 * k + 1e-3)
+      d.updateMatrix()
+      mesh.setMatrixAt(i, d.matrix)
+    })
+    mesh.instanceMatrix.needsUpdate = true
+  }
+  place(0)
   scene.add(mesh)
+  return { update: place }
 }
 
 // ---- the resort's props (shared/resort: Meshy models) --------------------------------------------

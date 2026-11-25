@@ -16,7 +16,7 @@
 // party.view(id) (only that phone: is it your shot, your club and aim, your last shot), the rest
 // stays on the TV.
 import { input } from './input.js'
-import { createMenu } from './menu.js'
+import { createMenu, QUIT_TO_LIBRARY } from './menu.js'
 import { fitCanvas } from './fit.js'
 import { createAudio } from './audio.js'
 import { createSave, createSettings } from './save.js'
@@ -153,9 +153,12 @@ const titleMenu = createMenu(
     { id: 'wardrobe', label: 'Wardrobe' },
     { id: 'settings', label: 'Settings' }
   ],
-  // The clubhouse rail: a column of tiles down the left (drawn by drawTitle()).
-  { y: 250, width: 330, height: 70, gap: 12, accent: GOLD }
+  // The clubhouse rail: a column of tiles down the left (drawn by drawTitle()). Inside the
+  // launcher a fifth tile, Quit to library, goes back to the games (menu.js adds it there only).
+  { y: 250, width: 330, height: 70, gap: 12, accent: GOLD, quitToLibrary: true }
 )
+/** menu.js lifts a menu half a row when it adds Quit to library; the rail keeps its top under the logo. */
+const titleLift = titleMenu.items.some((i) => i.id === QUIT_TO_LIBRARY) ? (70 + 12) / 2 : 0
 /** The TV's own wardrobe, for playing on this screen: the first crew bean's outfit (saved by name). */
 const wardrobeMenu = createMenu(
   [
@@ -248,7 +251,7 @@ function layout() {
   Object.assign(TOUCH.clubR, { x: W - 116, y: H - 110 })
   Object.assign(SAFETY_OK, { x: W / 2 - 110, y: 676 + DY })
   // The rail: centred in the left column; the menus inside it start under the logo.
-  titleMenu.place({ x: RAIL.w / 2, y: 244 + DY })
+  titleMenu.place({ x: RAIL.w / 2, y: 244 + DY + titleLift })
   wardrobeMenu.place({ x: RAIL.w / 2, y: 244 + DY })
   pickMenu.place({ x: RAIL.w / 2, y: 236 + DY })
   pauseMenu.place({ x: W / 2, y: H / 2 - 110 })
@@ -1350,7 +1353,8 @@ const TITLE_CARD = {
   party: { title: 'Everyone grabs a phone', steps: [['Scan the code on the TV', TEAL], ['Dress your bean', PINK], ['Hold SET and swing', LIME]] },
   solo: { title: 'Just you, on this screen', text: 'Swing with the meter (A to start, A for power, A on the line), or pull down and flick with a mouse or touch.' },
   wardrobe: { title: 'Dress your bean', text: 'A hat, a top and one extra for playing on this screen. Phones have their own wardrobe.' },
-  settings: { title: 'Settings', text: 'Sound, text size, graphics, swing power, and how much help with straight shots and putts.' }
+  settings: { title: 'Settings', text: 'Sound, text size, graphics, swing power, and how much help with straight shots and putts.' },
+  [QUIT_TO_LIBRARY]: { title: 'Back to your games', text: 'Leave Big Swing Golf for the library. Your bests and outfits are saved.' }
 }
 const MODE_TEXT = {
   practice: 'Hit as many as you like and see every number: carry, curve, club speed, tempo.',
@@ -1728,7 +1732,18 @@ function railIcon(id, x, y, on) {
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   ctx.beginPath()
-  if (id === 'party') {
+  if (id === QUIT_TO_LIBRARY) {
+    // A door with an arrow out of it.
+    ctx.moveTo(1, -10)
+    ctx.lineTo(9, -10)
+    ctx.lineTo(9, 10)
+    ctx.lineTo(1, 10)
+    ctx.moveTo(4, 0)
+    ctx.lineTo(-10, 0)
+    ctx.moveTo(-5, -5)
+    ctx.lineTo(-10, 0)
+    ctx.lineTo(-5, 5)
+  } else if (id === 'party') {
     ctx.roundRect(-6, -11, 12, 22, 3)
     ctx.moveTo(-2, 7)
     ctx.lineTo(2, 7)

@@ -45,8 +45,10 @@ after(async () => {
 })
 
 /** The TV, with a relay the test controls: tv.phone(id, name) joins, tv.say(id, data) sends a message from it. */
-async function tv({ query = '' } = {}) {
+async function tv({ query = '', launcher = false } = {}) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+  // Inside the PushPlay launcher: window.pushplay.quit() goes back to the library (counted here).
+  if (launcher) await page.addInitScript(() => (window.pushplay = { quit: () => (window.__quits = (window.__quits ?? 0) + 1) }))
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message))
   let socket
@@ -468,6 +470,26 @@ test('the title rail has a Wardrobe: playing on this screen, the bean wears what
   await t.page.waitForFunction(() => window.__game.state.screen === 'playing')
   assert.equal(await t.state(() => window.__game.state.seats[0].look.outfit.hat), 'shark')
   assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
+test('inside the launcher the title rail ends with Quit to library, and choosing it goes back to the games', async () => {
+  const t = await tv({ launcher: true })
+  assert.deepEqual(await t.state(() => window.__game.titleMenu.items.map((i) => i.id)), ['party', 'solo', 'wardrobe', 'settings', 'quit-to-library'])
+  // The rail keeps its first tile under the logo, and the last one clear of the prompts.
+  const [first, last] = await t.state(() => [window.__game.titleMenu.rect(0), window.__game.titleMenu.rect(4)])
+  assert.ok(first.y >= 230, `first tile at ${first.y}`)
+  assert.ok(last.y + last.h <= 740, `last tile ends at ${last.y + last.h}`)
+  for (let i = 0; i < 4; i++) await key(t.page, 'ArrowDown')
+  await key(t.page, 'Enter')
+  assert.equal(await t.state(() => window.__quits), 1)
+  assert.deepEqual(t.errors, [])
+  await t.page.close()
+})
+
+test('outside the launcher the title has no Quit tile: a browser tab can’t close itself', async () => {
+  const t = await tv()
+  assert.ok(!(await t.state(() => window.__game.titleMenu.items.some((i) => i.id === 'quit-to-library'))))
   await t.page.close()
 })
 

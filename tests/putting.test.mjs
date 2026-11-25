@@ -1,5 +1,5 @@
 // The putting green (src/putting.js): the ball rolling, breaking and dropping, and how a stroke
-// becomes a putt. Run: node --test games/seaside-swing/tests/
+// becomes a putt. Run: node --test games/big-swing-golf/tests/
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { bearing, describePutt, FT, GREEN, holeAt, HOLES, planPutt, practicePutt, puttHeight, puttSpeed, puttStandings, puttStroke, readPutt, rollPutt, settlePutt, surfaceOf } from '../src/putting.js'

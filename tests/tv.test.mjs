@@ -1,7 +1,7 @@
 // The TV side with phones: a fake relay hands the TV a room and lets the test play the phones,
 // joining and sending what controller.html sends ({ club }, { shot }). The game is built with
 // vite (as the build does) into a temp folder and served from there.
-// Run: node --test games/seaside-swing/tests/
+// Run: node --test games/big-swing-golf/tests/
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -19,7 +19,7 @@ let browser
 let base
 
 before(async () => {
-  ROOT = await mkdtemp(join(tmpdir(), 'seaside-swing-'))
+  ROOT = await mkdtemp(join(tmpdir(), 'big-swing-golf-'))
   await build({ root: GAME, logLevel: 'error', build: { outDir: ROOT, emptyOutDir: true } })
   server = createServer(async (req, res) => {
     let path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname)).replace(/^(\.\.[/\\])+/, '')
@@ -384,7 +384,7 @@ test('the Wardrobe: a phone dresses its bean, the TV shows it and remembers it b
   await t.page.waitForTimeout(150)
   assert.deepEqual(await t.state(() => window.__game.state.seats[1].look.outfit), seat.look.outfit)
   // Remembered by name: Bo plays again in the same outfit.
-  assert.deepEqual(await t.state(() => JSON.parse(localStorage.getItem('seaside-swing-save-v1')).outfits.Bo), seat.look.outfit)
+  assert.deepEqual(await t.state(() => JSON.parse(localStorage.getItem('big-swing-golf-save-v1')).outfits.Bo), seat.look.outfit)
   await t.page.evaluate(() => window.__game.state.seats.length = 0)
   t.say('p1', { pause: true })
   await t.page.waitForFunction(() => window.__game.party.public.menu?.title === 'Paused')
@@ -444,7 +444,7 @@ test('the title rail has a Wardrobe: playing on this screen, the bean wears what
   await key(t.page, 'Enter') // Wardrobe
   await t.page.waitForFunction(() => window.__game.state.screen === 'wardrobe')
   await key(t.page, 'ArrowRight') // Hat: from Pip's bucket hat to the next one, the shark-fin cap
-  const hat = await t.state(() => JSON.parse(localStorage.getItem('seaside-swing-save-v1')).outfits.Pip.hat)
+  const hat = await t.state(() => JSON.parse(localStorage.getItem('big-swing-golf-save-v1')).outfits.Pip.hat)
   assert.equal(hat, 'shark')
   await key(t.page, 'Escape') // back to the rail
   await t.page.waitForFunction(() => window.__game.state.screen === 'title')
@@ -480,7 +480,7 @@ test('a phone picks left-handed: the bean turns round, swings play left-handed h
   t.say('p1', { hand: 'L' })
   await t.page.waitForFunction(() => window.__game.state.seats[0].hand === 'L')
   assert.equal(await t.state(() => window.__game.party.views.p1.hand), 'L')
-  assert.equal(await t.state(() => JSON.parse(localStorage.getItem('seaside-swing-save-v1')).hands.Ada), 'L')
+  assert.equal(await t.state(() => JSON.parse(localStorage.getItem('big-swing-golf-save-v1')).hands.Ada), 'L')
   // Restarting builds the seats afresh from the players: Ada is still left-handed.
   await t.page.evaluate(() => (window.__game.state.seats[0].hand = null))
   t.say('p1', { pause: true })

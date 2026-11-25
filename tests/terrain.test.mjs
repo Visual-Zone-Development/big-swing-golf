@@ -1,5 +1,5 @@
 // The resort's ground: a flat range, hills on the left, the sea on the right and past the far
-// end, and balls that land on it. No browser needed. Run: node --test games/seaside-swing/tests/
+// end, and balls that land on it. No browser needed. Run: node --test games/big-swing-golf/tests/
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { HOLE } from '../src/course.js'

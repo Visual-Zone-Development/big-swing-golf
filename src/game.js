@@ -36,7 +36,7 @@ import { greenReach } from './green.js'
 import { scoreLanding, standings } from './targets.js'
 import { bearing, describePutt, FT, GREEN, holeAt, planPutt, practicePutt, previewPutt, puttHeight, puttSpeed, puttStandings, puttStroke, readPutt, rollPutt, settlePutt, startLine } from './putting.js'
 
-const ID = 'seaside-swing'
+const ID = 'big-swing-golf'
 // A party game is on a TV: the drawing space grows from 1280×800 to the screen's shape (1422×800
 // on 16:9, 1280×960 on a 4:3 tablet), so there are no bars. W and H follow the screen; layout()
 // runs on every resize. Centred content shifts down by DY on taller screens.

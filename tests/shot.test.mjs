@@ -1,5 +1,5 @@
 // From a swing to a ball: distances, curves, names and target scoring. No browser needed.
-// Run: node --test games/seaside-swing/tests/
+// Run: node --test games/big-swing-golf/tests/
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { CLUBS, TUNING, YD } from '../src/tuning.js'

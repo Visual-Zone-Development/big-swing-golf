@@ -1,5 +1,5 @@
 // The phone's swing reader (createSwingReader in public/controller.html), fed the sensor stream
-// of a simulated golfer (swing-sim.mjs). Run: node --test games/seaside-swing/tests/
+// of a simulated golfer (swing-sim.mjs). Run: node --test games/big-swing-golf/tests/
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

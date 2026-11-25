@@ -588,6 +588,18 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
         conf.push({ p: new THREE.Vector3(p.x, (p.y ?? 0) + 0.5, -p.z), vx: Math.cos(a) * s, vy: 6 + Math.random() * 9, vz: Math.sin(a) * s, life: 2 + Math.random(), floor: (p.y ?? 0) + 0.05, spin: 2 + Math.random() * 6, color: colors[i % colors.length] })
       }
     },
+    /** Screen position of a golfer's head (a look's id), for the name tag over them; null when not drawn. */
+    headOf(id, up = 1.55) {
+      const g = golfers.get(id)
+      if (!g?.root.visible) return null
+      const r = g.root.position
+      return this.project({ x: r.x, y: r.y + up, z: -r.z })
+    },
+    /** Screen position of the top of the flagstick (scaled up from afar), or null when there's no flag. */
+    flagTop() {
+      if (!cup.visible) return null
+      return this.project({ x: cup.position.x, y: cup.position.y + 2.45 * stick.scale.y, z: -cup.position.z })
+    },
     /** Screen position (1280×800) of a game-space point, or null when behind the camera. */
     project(p) {
       toV(p, tmp).project(camera)

@@ -880,7 +880,8 @@ function finishShot() {
       if (longest) state.banner = { text: 'New longest drive!', sub: `${r.total} yd`, color: GOLD, t: 0 }
       sfx.long()
     }
-    state.banner ??= { text: r.shape, sub: `${r.carry} yd carry`, color: r.shape === 'Straight!' ? LIME : INK, t: 0 }
+    const offChip = Math.abs(r.offline) < 1 ? 'on line' : `${Math.abs(r.offline)} yd ${r.offline > 0 ? 'right' : 'left'}`
+    state.banner ??= { text: r.shape, chips: [{ text: `${r.carry} yd`, gold: true }, { text: offChip }], color: r.shape === 'Straight!' ? LIME : INK, t: 0 }
     const good = r.shape === 'Straight!' && sh.input.power > 0.75
     // A big hook or slice makes them wince; the sea makes them sad (below).
     if (!r.flight.water) cheer(s, good ? 'cheer' : Math.abs(r.offline) < 12 ? 'happy' : Math.abs(r.offline) < 30 ? 'wince' : 'sad')
@@ -891,7 +892,12 @@ function finishShot() {
   }
   save.save()
   const off = r.flight.water ? 'in the sea' : Math.abs(r.offline) < 1 ? 'on line' : `${Math.abs(r.offline)} yd ${r.offline > 0 ? 'right' : 'left'}`
-  if (s.kind === 'phone') party.view(s.id).last = `${r.carry} yd carry · ${r.shape} · ${off}${sh.input.lazy ? ' · swing through faster for the full bar' : ''}`
+  // The phone gets the numbers in full (the TV keeps to the moment): practice is about the details.
+  const i = sh.input
+  const detail = state.mode === 'practice' && i.how === 'phone'
+    ? ` · ${r.total} yd total · ${Math.round(i.power * 100)}%${i.mph ? ` · ${i.mph} mph` : ''} · face ${Math.abs(i.face) < 0.5 ? 'square' : `${Math.round(Math.abs(i.face))}° ${i.face > 0 ? 'open' : 'closed'}`} · path ${Math.abs(i.path) < 0.5 ? 'straight' : `${Math.round(Math.abs(i.path))}° ${i.path > 0 ? 'out' : 'in'}`}${i.raw ? ` · tempo ${i.raw.tempo}:1` : ''}`
+    : ''
+  if (s.kind === 'phone') party.view(s.id).last = `${r.carry} yd carry · ${r.shape} · ${off}${detail}${i.lazy ? ' · swing through faster for the full bar' : ''}`
   state.phase = 'result'
   state.resultTime = 0
   publish()
@@ -1801,14 +1807,22 @@ function hint(kind) {
 }
 
 /**
- * The HUD, broadcast-style: a small chip top left (who's up and the one number that matters
- * now), everyone's score top right with two or more players, and the middle of the screen left
- * to the golf: how-to text only when it helps, one result said once.
+ * The HUD, game-style corners (after Mario Golf): a hole badge top left (when there's a hole,
+ * ball or stroke to count), the club card bottom left, a name tag over the golfer and the
+ * distance over the flag, in the scene; everyone's score bottom right with two or more players.
+ * The middle of the screen is left to the golf: how-to text only when it helps, one result
+ * said once, and a phone player's detailed numbers on their phone.
  */
 function drawHud(s) {
   hud = {}
   if (!s) return
-  hudChip(s)
+  const aiming = state.phase === 'aim' || state.phase === 'meter'
+  holeBadge(s)
+  if (aiming) {
+    clubCard(s)
+    nameTag(s)
+    pinTag(s)
+  }
   const pointer = input.mode === 'mouse' || input.mode === 'touch'
   // Pause: a button for mouse and touch; controllers and keys have Start / Esc.
   if (pointer) {
@@ -1818,16 +1832,20 @@ function drawHud(s) {
     ctx.fillRect(PAUSE_BUTTON.x + 18, PAUSE_BUTTON.y + 16, 7, 24)
     ctx.fillRect(PAUSE_BUTTON.x + 31, PAUSE_BUTTON.y + 16, 7, 24)
   }
-  // Scores: only when there's someone to compare with.
+  // Scores, bottom right: only when there's someone to compare with.
   if (state.seats.length > 1) {
     hud.scoreboard = true
-    const top = pointer ? 100 : 28
+    const rs = Math.min(ts(), 1.2)
+    const rowH = Math.round(30 * rs)
+    const n = state.seats.length
+    const top = H - 28 - n * rowH - 16
+    panel(W - 248, top, 220, n * rowH + 16, 18, 'rgba(11,26,54,0.55)')
     state.seats.forEach((o, i) => {
-      const y = top + i * 36
-      panel(W - 236, y, 206, 30, 10, o === s ? 'rgba(11,26,54,0.85)' : 'rgba(11,26,54,0.5)')
-      dot(W - 218, y + 15, 7, o.color)
-      text(o.name.slice(0, 10), W - 204, y + 16, fitFont((px) => body(px / ts(), 500), 17 * Math.min(ts(), 1.2), 110, o.name.slice(0, 10)), connected(o) ? INK : QUIET, 'left')
-      text(scoreText(o), W - 42, y + 16, body(Math.min(18, 18 * ts()) / ts()), o === s ? GOLD : INK, 'right')
+      const y = top + 8 + i * rowH + rowH / 2
+      dot(W - 228, y, 6, o.color)
+      const name = o.name.slice(0, 10)
+      text(name, W - 214, y + 1, fitFont((px) => rubik(px, 700), 17 * rs, 120, name), connected(o) ? INK : QUIET, 'left')
+      text(scoreText(o), W - 44, y + 1, rubik(18 * rs), o === s ? GOLD : INK, 'right')
     })
   }
 
@@ -1862,56 +1880,134 @@ function drawHud(s) {
       ctx.globalAlpha = fade
       ctx.translate(W / 2, 236 + DY)
       ctx.scale(pop, pop)
-      text(state.banner.text, 0, 0, head(state.banner.text.length > 10 ? 64 : 84), state.banner.color)
-      if (state.banner.sub) text(state.banner.sub, 0, 56, body(24), INK)
+      text(state.banner.text, 0, 0, head(state.banner.text.length > 10 ? 72 : 96), state.banner.color)
+      // Under it, the numbers that matter as chips (the carry in gold), or its one line.
+      const chips = state.banner.chips ?? (state.banner.sub ? [{ text: state.banner.sub }] : [])
+      const font = rubik(22 * Math.min(ts(), 1.2), 800)
+      ctx.font = font
+      const widths = chips.map((c) => ctx.measureText(c.text).width + 32)
+      let cx = -(widths.reduce((a, b) => a + b, 0) + 12 * (chips.length - 1)) / 2
+      chips.forEach((c, i) => {
+        panel(cx, 50, widths[i], 40, 16, c.gold ? GOLD : 'rgba(11,26,54,0.78)')
+        plain(c.text, cx + widths[i] / 2, 71, font, c.gold ? '#0b1a36' : INK)
+        cx += widths[i] + 12
+      })
       ctx.restore()
     }
   }
   if (state.mode === 'practice' && state.recent.length && state.phase !== 'flight') drawMap()
   if (isCourse() && state.phase !== 'flight') drawHoleMap(s)
-  drawJoinBadge(ctx, party, 32, H - 90)
+  // Join with code: top right (the bottom left is the club card's).
+  drawJoinBadge(ctx, party, W - 210 - (pointer ? 104 : 32), 32)
 }
 
-/** Top left: who's up, and the one number that matters now; the aim only when it's off the line. */
-function hudChip(s) {
+/** Top left: the hole (or ball) badge, when there's a hole, ball or stroke to count. */
+function holeBadge(s) {
+  let num
+  let title
+  let sub
+  if (isCourse()) [num, title, sub] = ['1', `Par ${HOLE.par}`, s.done ? 'Holed' : `Stroke ${s.strokes + 1}`]
+  else if (isPutts()) [num, title, sub] = [String(state.hole + 1), `Hole ${state.hole + 1} of ${PT.holes}`, s.done ? 'Holed' : `Putt ${s.strokes + 1}`]
+  else if (isTargets()) {
+    const ball = Math.min(TUNING.targets.balls, s.shots.length + (state.phase === 'aim' || state.phase === 'meter' ? 1 : 0))
+    ;[num, title, sub] = [String(ball), `Ball ${ball} of ${TUNING.targets.balls}`, 'Target challenge']
+  } else return
+  hud.badge = title
+  const rs = Math.min(ts(), 1.2)
+  const titleFont = lilita(24 * rs)
+  const subFont = rubik(16 * rs)
+  ctx.font = titleFont
+  const tw = ctx.measureText(title).width
+  ctx.font = subFont
+  const sw = ctx.measureText(sub).width
+  const r = Math.round(26 * rs)
+  const h = 2 * r + 20
+  const w = 10 + 2 * r + 14 + Math.max(tw, sw) + 22
+  panel(28, 24, w, h, h / 2, 'rgba(11,26,54,0.72)')
+  dot(38 + r, 24 + h / 2, r, GOLD)
+  plain(num, 38 + r, 24 + h / 2 + 2, lilita(30 * rs), '#0b1a36')
+  text(title, 38 + 2 * r + 14, 24 + h / 2 - 9 * rs, titleFont, INK, 'left')
+  text(sub, 38 + 2 * r + 14, 24 + h / 2 + 15 * rs, subFont, QUIET, 'left')
+}
+
+/** Bottom left: the club card: the club, how far it carries (or the putt's read), the aim when it's off the line. */
+function clubCard(s) {
+  const putting = isPutting()
   const club = CLUBS[s.club]
-  const who = s.name === s.crew.name ? s.name : `${s.name} · ${s.crew.name}`
-  const name = who.length > 16 ? who.slice(0, 15) + '…' : who
-  let meta = ''
-  if (isPutts()) meta = `Hole ${state.hole + 1}/${PT.holes}`
-  else if (isCourse()) meta = `Stroke ${s.strokes + 1}`
-  else if (isTargets()) meta = `Ball ${Math.min(TUNING.targets.balls, s.shots.length + (state.phase === 'aim' || state.phase === 'meter' ? 1 : 0))}/${TUNING.targets.balls}`
-  let main
-  let aim = 0
-  if (isPutting()) {
-    main = s.ball && s.cup ? puttRead(s) : 'Putter'
-    aim = Math.round(s.paim * 2) / 2
-  } else {
-    main = isCourse() && s.ball ? `${club.name} · ${Math.round(yardsToPin(s.ball))} yd to pin` : `${club.name} · ${club.carry} yd`
-    aim = Math.round(s.aim)
-  }
-  const aimText = aim ? `aim ${Math.abs(aim)}° ${aim > 0 ? 'R' : 'L'}` : ''
-  const rs = Math.min(ts(), 1.25)
-  const nameFont = rubik(24 * rs)
-  const metaFont = rubik(17 * rs, 500)
-  const mainFont = rubik(20 * rs)
-  const aimFont = rubik(17 * rs, 500)
+  const short = putting ? 'PT' : club.short
+  const name = putting ? 'Putter' : club.name
+  const line = putting ? (s.ball && s.cup ? puttRead(s) : '') : `${club.carry} yd carry`
+  const aim = putting ? Math.round(s.paim * 2) / 2 : Math.round(s.aim)
+  const aimText = aim ? `aim ${Math.abs(aim)}° ${aim > 0 ? 'right' : 'left'}` : ''
+  hud.club = `${short} ${name}`
+  const rs = Math.min(ts(), 1.2)
+  const nameFont = rubik(22 * rs)
+  const lineFont = rubik(18 * rs)
+  const aimFont = rubik(15 * rs, 500)
   ctx.font = nameFont
-  const nameW = ctx.measureText(name).width
-  ctx.font = metaFont
-  const metaW = meta ? ctx.measureText(meta).width + 18 : 0
-  ctx.font = mainFont
-  const mainW = ctx.measureText(main).width
+  let tw = ctx.measureText(name).width
+  ctx.font = lineFont
+  tw = Math.max(tw, ctx.measureText(line).width)
   ctx.font = aimFont
-  const aimW = aimText ? ctx.measureText(aimText).width + 14 : 0
-  const w = Math.max(200, 56 + Math.max(nameW + metaW, mainW + aimW) + 22)
-  const h = Math.round(74 * rs)
-  panel(28, 24, w, h, 16, 'rgba(11,26,54,0.72)')
-  dot(50, 24 + h * 0.32, 9, s.color)
-  text(name, 66, 24 + h * 0.32 + 1, nameFont, INK, 'left')
-  if (meta) text(meta, 28 + w - 16, 24 + h * 0.32 + 1, metaFont, QUIET, 'right')
-  text(main, 42, 24 + h * 0.72, mainFont, GOLD, 'left')
-  if (aimText) text(aimText, 28 + w - 16, 24 + h * 0.72, aimFont, INK, 'right')
+  tw = Math.max(tw, aimText ? ctx.measureText(aimText).width : 0)
+  const sq = Math.round(72 * rs)
+  const h = sq + 24
+  const w = 12 + sq + 14 + tw + 24
+  const x = 28
+  // Above the touch buttons' row when there are touch buttons (layout()).
+  const y = (input.mode === 'touch' || input.mode === 'mouse') && s.kind !== 'phone' ? TOUCH.aimL.y - 40 - h : H - 28 - h
+  hud.clubCard = { x, y, w, h }
+  panel(x, y, w, h, 22, 'rgba(11,26,54,0.78)')
+  panel(x + 12, y + 12, sq, sq, 16, INK)
+  plain(short, x + 12 + sq / 2, y + 12 + sq / 2 + 2, fitFont(lilita, 34 * rs, sq - 10, short), '#0b1a36')
+  const tx = x + 12 + sq + 14
+  const rows = aimText ? [-20, 4, 26] : [-12, 14]
+  text(name, tx, y + h / 2 + rows[0] * rs, nameFont, INK, 'left')
+  text(line, tx, y + h / 2 + rows[1] * rs, lineFont, GOLD, 'left')
+  if (aimText) text(aimText, tx, y + h / 2 + rows[2] * rs, aimFont, QUIET, 'left')
+}
+
+/** A tag over the golfer's head: who's up. */
+function nameTag(s) {
+  const p = view.headOf(s.look.id)
+  if (!p || p.y < 40 || p.y > H - 40 || p.x < 40 || p.x > W - 40) return
+  hud.nameTag = s.name
+  const font = rubik(18 * Math.min(ts(), 1.2), 800)
+  ctx.font = font
+  const w = ctx.measureText(s.name).width + 24
+  const y = Math.max(12, p.y - 34) // close up, the head can be near the top: keep the tag on screen
+  panel(p.x - w / 2, y, w, 30, 12, s.color)
+  ctx.fillStyle = s.color
+  ctx.beginPath()
+  ctx.moveTo(p.x - 7, y + 29)
+  ctx.lineTo(p.x + 7, y + 29)
+  ctx.lineTo(p.x, y + 37)
+  ctx.fill()
+  plain(s.name, p.x, y + 16, font, '#0b1a36')
+}
+
+/** Over the flag: how far it is (yards on the course, feet on the green). */
+function pinTag(s) {
+  if (!s.ball || !s.cup) return
+  const p = view.flagTop()
+  // Close to the green the flag's top can be above the screen: the tag then rides the top edge.
+  if (!p || p.y > H - 80 || p.x < 60 || p.x > W - 60) return
+  const putting = isPutting()
+  const ft = putting ? readPutt(s.ball, s.cup, greenOf()).feet : 0
+  const words = putting ? `${ft < 10 ? ft.toFixed(1) : Math.round(ft)} ft` : `${Math.round(yardsToPin(s.ball))} yd`
+  hud.pinTag = words
+  const font = lilita(26 * Math.min(ts(), 1.2))
+  ctx.font = font
+  const w = ctx.measureText(words).width + 28
+  const y = Math.max(12, p.y - 46)
+  panel(p.x - w / 2, y, w, 38, 14, 'rgba(11,26,54,0.8)')
+  ctx.fillStyle = 'rgba(11,26,54,0.8)'
+  ctx.beginPath()
+  ctx.moveTo(p.x - 8, y + 38)
+  ctx.lineTo(p.x + 8, y + 38)
+  ctx.lineTo(p.x, y + 48)
+  ctx.fill()
+  plain(words, p.x, y + 21, font, INK)
 }
 
 /** Before you swing: room, grip, a smooth swing; who has read it on their phone. */
@@ -2012,6 +2108,33 @@ function wrap(str, x, y, width, font, color, draw = text, lh = 28) {
   wrapLines(str, width, font).forEach((line, i) => draw(line, x, y + i * lh, font, color, 'left'))
 }
 
+/**
+ * The how-to (or what's blocking the shot), in a pill at the bottom middle: off the golfer and the
+ * ball, between the club card and the scores. Called inside drawHud's DY shift; it sits on the real
+ * bottom edge (above the touch buttons' row when there are touch buttons).
+ */
+function hintPill(main, sub = '') {
+  const rs = Math.min(ts(), 1.2)
+  const room = W - 2 * 330 // clear of the club card and the touch club buttons
+  const mainFont = fitFont((px) => rubik(px, 800), 22 * rs, room - 36, main)
+  const subFont = fitFont((px) => rubik(px, 500), 16 * rs, room - 36, sub)
+  ctx.font = mainFont
+  let w = ctx.measureText(main).width
+  if (sub) {
+    ctx.font = subFont
+    w = Math.max(w, ctx.measureText(sub).width)
+  }
+  w += 36
+  const h = Math.round((sub ? 64 : 42) * rs)
+  const y = H - DY - 28 - h
+  hud.hintPill = { y, h, w }
+  panel(W / 2 - w / 2, y, w, h, Math.min(h / 2, 20), 'rgba(11,26,54,0.62)')
+  if (sub) {
+    plain(main, W / 2, y + h / 2 - 11 * rs, mainFont, GOLD)
+    plain(sub, W / 2, y + h / 2 + 14 * rs, subFont, INK)
+  } else plain(main, W / 2, y + h / 2 + 1, mainFont, GOLD)
+}
+
 function drawAimHelp(s) {
   const touchUi = input.mode === 'touch' || input.mode === 'mouse'
   const told = hint(hintKind(s))
@@ -2021,11 +2144,13 @@ function drawAimHelp(s) {
     const putting = isPutting()
     // What blocks the shot is always said; how to swing only as a hint (hint()).
     const blocked = !state.safe.has(s.id) ? 'Read the safety card on your phone first' : st === 'ask' ? 'Tap "Allow motion" on your phone' : st !== 'on' && st !== 'touch' ? 'Waiting for the phone’s sensors…' : ''
-    if (blocked) text(blocked, W / 2, 650, body(30), GOLD)
+    if (blocked) hintPill(blocked)
     else if (told && !inp.a) {
       hud.hint = true
-      text(st === 'touch' ? 'Pull down on your phone’s pad, then flick up' : putting ? 'Hold SET on your phone and putt' : 'Hold SET on your phone and swing', W / 2, 650, body(30), GOLD)
-      text(st === 'touch' ? 'No motion sensors on this phone: the pad swings for you' : putting ? 'The backstroke sets how far it rolls' : 'Your backswing fills the bar; swing through to deliver it', W / 2, 692, body(20, 500), INK)
+      hintPill(
+        st === 'touch' ? 'Pull down on your phone’s pad, then flick up' : putting ? 'Hold SET on your phone and putt' : 'Hold SET on your phone and swing',
+        st === 'touch' ? 'No motion sensors on this phone: the pad swings for you' : putting ? 'The backstroke sets how far it rolls' : 'Your backswing fills the bar; swing through to deliver it',
+      )
     }
     // The live swing: how far back, then the downswing.
     if (inp.a) {
@@ -2041,11 +2166,9 @@ function drawAimHelp(s) {
     }
   } else if (state.phase === 'aim' && told) {
     hud.hint = true
-    if (touchUi) {
-      text(isPutting() ? 'Pull down on the green, then flick up to putt' : 'Pull down on the course, then flick up to swing', W / 2, 650, body(26), GOLD)
-      text(isPutting() ? 'A longer flick rolls it further' : 'Flick straight up for a straight shot', W / 2, 688, body(20, 500), INK)
-    } else if (isPutting()) text(`${input.label('a')} to putt · ${input.stickLabel()} to aim`, W / 2, 668, body(24), GOLD)
-    else text(`${input.label('a')} to swing · ${input.stickLabel()} to aim · ${input.dpadLabel()} ▲▼ club`, W / 2, 668, body(24), GOLD)
+    if (touchUi) hintPill(isPutting() ? 'Pull down on the green, then flick up to putt' : 'Pull down on the course, then flick up to swing', isPutting() ? 'A longer flick rolls it further' : 'Flick straight up for a straight shot')
+    else if (isPutting()) hintPill(`${input.label('a')} to putt · ${input.stickLabel()} to aim`)
+    else hintPill(`${input.label('a')} to swing · ${input.stickLabel()} to aim · ${input.dpadLabel()} ▲▼ club`)
   }
   if (touchUi && s.kind !== 'phone' && state.phase === 'aim') {
     ctx.save()
@@ -2160,6 +2283,18 @@ function drawReadout(sh) {
   const note = i.lazy ? 'Swing through faster: your backswing had more in it' : ''
   if (state.mode !== 'practice') {
     if (note) text(note, W / 2, 690, rubik(20 * Math.min(ts(), 1.2)), GOLD)
+    return
+  }
+  // A phone player's numbers are on their phone: say so, once, small.
+  if (i.how === 'phone') {
+    hud.readout = 'phone'
+    const words = `Face, path, tempo and club speed are on ${sh.seat.name}'s phone`
+    const font = rubik(17 * Math.min(ts(), 1.2))
+    ctx.font = font
+    const w = ctx.measureText(words).width + 36
+    panel(W / 2 - w / 2, 708, w, 36, 18, 'rgba(11,26,54,0.6)')
+    plain(words, W / 2, 727, font, QUIET)
+    if (note) text(note, W / 2, 680, rubik(20 * Math.min(ts(), 1.2)), GOLD)
     return
   }
   const off = Math.abs(r.offline) < 1 ? 'on line' : `${Math.abs(r.offline)} yd ${r.offline > 0 ? 'right' : 'left'}`

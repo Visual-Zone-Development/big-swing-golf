@@ -41,7 +41,7 @@ export function readPhoneSwing(sw, { strength = 'normal', T = TUNING.swing } = {
 }
 
 /**
- * Straighten and clamp: small errors count as square, "Straight shot help" scales the rest,
+ * Straighten and clamp: small errors count as square, the level's straight-shot help scales the rest,
  * and swinging past full power makes the face wilder.
  */
 export function settle({ power, face, path }, { assist = 'off', T = TUNING.swing } = {}) {

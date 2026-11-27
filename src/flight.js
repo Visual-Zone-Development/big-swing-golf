@@ -39,6 +39,8 @@ export function simulate(shot, club, B = TUNING.ball, { from = null, cup = null 
   let holed = false
   const P = TUNING.putting
   const isRough = (lie) => lie !== 'fairway' && lie !== 'green' && lie !== 'fringe'
+  const isSand = (lie) => lie === 'sand' || lie === 'bunker'
+  let sand = false
   const points = [{ t, x, y, z }]
   for (let n = 1; n < 60 * 120; n++) {
     if (!rolling) {
@@ -73,10 +75,13 @@ export function simulate(shot, club, B = TUNING.ball, { from = null, cup = null 
           break
         }
         y = g
-        rough = isRough(lieAt(x, z))
+        const lie = lieAt(x, z)
+        rough = isRough(lie)
+        sand = isSand(lie)
         carry ??= { x, y, z, t: t + STEP }
-        const keep = club.land * (rough ? 0.8 : 1)
-        vy = -vy * (rough ? B.roughBounce : B.bounce)
+        // Sand swallows it: no bounce, and almost all its pace gone.
+        const keep = sand ? B.sandKeep : club.land * (rough ? 0.8 : 1)
+        vy = sand ? 0 : -vy * (rough ? B.roughBounce : B.bounce)
         vx *= keep
         vz *= keep
         if (vy < B.hopMin) {
@@ -86,7 +91,9 @@ export function simulate(shot, club, B = TUNING.ball, { from = null, cup = null 
       }
     } else {
       const g = groundHeight(x, z)
-      rough = isRough(lieAt(x, z))
+      const lie = lieAt(x, z)
+      rough = isRough(lie)
+      sand = isSand(lie)
       // On a slope, gravity pulls it downhill.
       const gx = (groundHeight(x + 0.5, z) - groundHeight(x - 0.5, z)) / 1
       const gz = (groundHeight(x, z + 0.5) - groundHeight(x, z - 0.5)) / 1
@@ -95,11 +102,11 @@ export function simulate(shot, club, B = TUNING.ball, { from = null, cup = null 
       const v = Math.hypot(vx, vz)
       // Rolling drag eases off as it slows, so it trickles the last bit rather than stopping dead.
       const ease = B.rollEase + (1 - B.rollEase) * Math.min(1, v / B.rollEaseBelow)
-      const nv = v - (club.roll + (rough ? B.roughRoll : 0)) * ease * STEP
+      const nv = v - (club.roll + (sand ? B.sandRoll : rough ? B.roughRoll : 0)) * ease * STEP
       rolledFor += STEP
       // It stops when it's slow and the slope can't beat the grass's grip (or it has rolled long
       // enough: on rolling hills it would otherwise rock in a dip, or creep, for a minute).
-      const grip = club.roll + (rough ? B.roughRoll : 0)
+      const grip = club.roll + (sand ? B.sandRoll : rough ? B.roughRoll : 0)
       const pull = B.gravity * 0.6 * Math.hypot(gx, gz)
       if ((nv <= B.stopSpeed && pull <= grip) || rolledFor > B.maxRoll) {
         t += STEP

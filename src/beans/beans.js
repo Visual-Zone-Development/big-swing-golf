@@ -1,5 +1,5 @@
-// The bean crew, from the Meshy models in ./models (see README.md). Shared asset: games copy this
-// folder; they don't import it from here.
+// The bean crew, from the Meshy models in public/beans (see COPIED.md: this is the game's own copy of
+// the workshop's shared bean kit).
 //
 //   const kit = await loadBeans('./beans/')            // the GLBs, once
 //   const bean = kit.make({ color: '#ff5c8a', outfit: { hat: 'shark', top: 'polo', acc: 'lei' } })
@@ -25,7 +25,7 @@ import { BLINKS, FACES, paintFace } from './faces.js'
 export { FACES }
 export const HEIGHT = 1.45
 /** The model's own orange (measured from its texture, sRGB): what the tint replaces. */
-const BASE_ORANGE = { h: 25 / 360, s: 0.965, v: 0.992 }
+const BASE_ORANGE = { h: 24.4 / 360, s: 0.957, v: 0.996 }
 
 /**
  * How each prop sits on the bean (bean space: +z is the bean's front before it's turned to face
@@ -39,10 +39,15 @@ export const PROPS = {
   snorkel: { file: 'snorkel-mask', slot: 'acc', width: 0.56, bottom: 1.1, z: 0.1, turn: 0, tilt: -0.15 }
 }
 
-/** Tops: cut from the body between two heights, with short sleeves: a white polo, or a print. */
+/** The gloves' size against the model's own (its cartoon gloves would swallow a club's grip). */
+const HAND = 0.68
+/** How far (radians) resting arms drop from the rig's A-pose toward the sides. */
+const HANG = 0.42
+
+/** Tops: cut from the body between two heights: a white polo, or a print. Sleeveless (sleeves: the height the upper arms are kept above; 9 = none): on this rig a sleeve tears where the arm bends. */
 export const TOPS = {
-  polo: { from: 0.4, to: 0.9, sleeves: 0.8 },
-  hawaiian: { from: 0.4, to: 0.9, sleeves: 0.8, print: true }
+  polo: { from: 0.42, to: 0.86, sleeves: 9 },
+  hawaiian: { from: 0.42, to: 0.86, sleeves: 9, print: true }
 }
 
 /** Load the models (base: the folder URL the GLBs are served from, ending in /). */
@@ -99,6 +104,8 @@ function makeBean(source, props, def) {
   body.material = tinted(body.material, def.color)
   const bones = {}
   body.skeleton.bones.forEach((b) => (bones[b.name] = b))
+  // The model's gloves are huge next to a golf club's grip: shrink them (the hand bones scale the glove).
+  for (const side of ['Left', 'Right']) bones[`${side}Hand`]?.scale.multiplyScalar(HAND)
   const rest = new Map(body.skeleton.bones.map((b) => [b, { q: b.quaternion.clone(), s: b.scale.clone() }]))
   root.updateMatrixWorld(true)
 
@@ -154,7 +161,7 @@ function makeBean(source, props, def) {
   }
 
   // Reaching: aim each upper arm so its hand lands on a target (stretching a little if needed).
-  const tmp = { a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3(), q: new THREE.Quaternion(), pq: new THREE.Quaternion() }
+  const tmp = { a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3(), d: new THREE.Vector3(), e: new THREE.Vector3(), q: new THREE.Quaternion(), pq: new THREE.Quaternion() }
   function aim(side, target) {
     const arm = bones[`${side}Arm`]
     const hand = bones[`${side}Hand`]
@@ -163,11 +170,16 @@ function makeBean(source, props, def) {
     arm.quaternion.copy(r.q)
     arm.scale.copy(r.s)
     rest.get(fore) && fore.quaternion.copy(rest.get(fore).q)
-    if (!target) return
     arm.updateMatrixWorld(true)
     const from = arm.getWorldPosition(tmp.a)
     const now = hand.getWorldPosition(tmp.b).sub(from)
-    const want = tmp.c.copy(target).sub(from)
+    const want = tmp.c
+    if (target) want.copy(target).sub(from)
+    else {
+      // Resting: the model's arms are rigged out in an A; let them hang closer to the sides.
+      const down = tmp.d.set(0, -1, 0)
+      want.copy(now).applyAxisAngle(tmp.e.crossVectors(now, down).normalize(), Math.min(HANG, now.angleTo(down)))
+    }
     const reach = now.length()
     // Rotate the arm in world space from where the hand is to where it should be.
     tmp.q.setFromUnitVectors(now.normalize(), want.clone().normalize())
@@ -223,7 +235,7 @@ export const EXPRESSIONS = {
   smug: { lid: [0.5, 0.62], low: 0.2, pupil: 0.9, look: [0.35, -0.05], browY: [0.01, -0.004], tilt: [0.22, -0.1] }
 }
 /** Where the eyes sit on the bean (bean space, metres): height, either side of the middle, size. */
-const EYE = { y: 1.12, x: 0.088, r: 0.062 }
+const EYE = { y: 1.1, x: 0.1, r: 0.07 }
 const pair = (v) => (Array.isArray(v) ? v : [v, v])
 
 /** Where a ray from the front (+z) meets the body (bean space, metres), and the surface's normal. */

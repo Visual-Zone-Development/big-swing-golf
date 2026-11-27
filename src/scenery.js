@@ -8,11 +8,16 @@ import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import { TUNING, YD } from './tuning.js'
-import { fairwayHalf, groundHeight, landHeight, SEA_LEVEL, surfaceAt } from './terrain.js'
-import { HOLE } from './course.js'
+import { fairwayHalf, groundHeight, landHeight, lieAt, SEA_LEVEL, surfaceAt } from './terrain.js'
+import { APRON, FAIRWAY_HALF, ellipseReach, HOLES, trapOutline } from './course.js'
+import { COAST, HILLS, shoreDistance } from './links.js'
 import { GREEN, greenReach, puttHeight, slopeAt } from './putting.js'
 import { createTufts, grassMaterial, grassUVs, setGrassDetail } from './grass.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { createSea } from './sea.js'
+import { createGulls } from './gulls.js'
+import { clothMaterial, pennantGeometry } from './cloth.js'
+import { bushGeometry, lodInstances, palmGeometry, swayMaterial, treeGeometry, wind } from './flora.js'
 
 export const COLORS = {
   skyTop: '#2f86ee',
@@ -78,36 +83,10 @@ export function createScenery(scene) {
   scene.fog = new THREE.Fog(COLORS.skyHorizon, 150, 950)
 
   // ---- land --------------------------------------------------------------------------------------
-  // One mesh from 60 m behind the tee to well past the beach, coloured by what it is.
-  const land = new THREE.PlaneGeometry(820, 820, 110, 110)
-  land.rotateX(-Math.PI / 2) // now x right, y up, z toward the camera (three space)
-  const pos = land.attributes.position
-  const colors = new Float32Array(pos.count * 3)
-  const c = new THREE.Color()
-  const lo = new THREE.Color(COLORS.hillLow)
-  const hi = new THREE.Color(COLORS.hillHigh)
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i)
-    const z = -(pos.getZ(i) - 350) // game z: from -60 (behind the tee) to 760
-    pos.setZ(i, -z)
-    const h = landHeight(x, z)
-    pos.setY(i, h)
-    const s = surfaceAt(x, z)
-    if (s === 'range') c.set(COLORS.rough)
-    else if (s === 'hill') c.copy(lo).lerp(hi, Math.min(1, Math.max(0, h / 22)))
-    else if (h > SEA_LEVEL + 0.35) c.set(h < SEA_LEVEL + 0.9 ? COLORS.wetSand : COLORS.sand)
-    else if (h > SEA_LEVEL - 0.05) c.set(COLORS.foam)
-    else c.set(COLORS.seabed).lerp(new THREE.Color(COLORS.sea), Math.min(1, (SEA_LEVEL - h) / 3))
-    // A little variation so big areas don't look flat.
-    const n = 1 + 0.04 * Math.sin(x * 0.31) * Math.sin(z * 0.27)
-    colors.set([c.r * n, c.g * n, c.b * n], i * 3)
-  }
-  land.setAttribute('color', new THREE.BufferAttribute(colors, 3))
-  land.computeVertexNormals()
-  grassUVs(land)
-  const ground = new THREE.Mesh(land, grassMaterial({ vertexColors: true, patch: 0.26 }))
-  ground.receiveShadow = true
-  scene.add(ground)
+  // The range: one mesh from 60 m behind the tee to well past the beach, coloured by what it is.
+  // The course, south of it: another, a little finer (its coast has a bay and a headland).
+  scene.add(landMesh(820, 820, 110, 110, 0, 350))
+  scene.add(landMesh(1000, 762, 200, 152, 0, -439))
 
   // The fairway: a fan, mown in stripes every 10 yards, rounded at both ends.
   const fw = new THREE.Shape()
@@ -128,6 +107,9 @@ export function createScenery(scene) {
   scene.add(fairway)
   const lineMat = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.45, depthWrite: false })
   const lines = []
+  // The range's yardage boards: measured from the range's tee, so hidden on the course.
+  const boards = new THREE.Group()
+  scene.add(boards)
   for (let yd = 50; yd <= 250; yd += 50) {
     const z = yd * YD
     lines.push(new THREE.PlaneGeometry(fairwayHalf(z) * 2 - 4, 0.45).rotateX(-Math.PI / 2).translate(0, 0.02, -z))
@@ -135,17 +117,16 @@ export function createScenery(scene) {
       const board = yardBoard(yd)
       board.position.set(side * (fairwayHalf(z) + 7), 0, -z)
       board.rotation.y = -side * 0.35
-      scene.add(board)
+      boards.add(board)
     }
   }
   const yardLines = new THREE.Mesh(mergeGeometries(lines), lineMat)
   scene.add(yardLines)
 
   // ---- sea ---------------------------------------------------------------------------------------
-  const sea = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), new THREE.MeshStandardMaterial({ color: COLORS.sea, roughness: 0.16, metalness: 0.05, transparent: true, opacity: 0.86 }))
-  sea.rotation.x = -Math.PI / 2
-  sea.position.set(0, SEA_LEVEL, -600)
-  scene.add(sea)
+  // sea.js: clear over the sand, deep offshore, foam lapping at the waterline, glinting waves.
+  const sea = createSea()
+  scene.add(sea.mesh)
   // Far islands, soft in the haze.
   const islands = []
   for (const [x, z, r, h] of [
@@ -186,19 +167,40 @@ export function createScenery(scene) {
     if (groundHeight(x, z) > SEA_LEVEL + 0.6) palms.push([x, z, 0.85 + rand() * 0.35, rand() * Math.PI * 2])
   }
   // Flower patches by the tee and along the rough.
-  const patch = (x, z, n) => {
-    for (let i = 0; i < n; i++) flowers.push([x + (rand() - 0.5) * 5, z + (rand() - 0.5) * 3])
+  // Clumped toward each patch's middle (two randoms), so they read as beds, not confetti.
+  const patch = (x, z, n, w = 5, d = 3) => {
+    for (let i = 0; i < n; i++) flowers.push([x + (rand() + rand() - 1) * w * 0.6, z + (rand() + rand() - 1) * d * 0.6])
   }
-  patch(-6, -3, 22)
-  patch(6.5, -2, 22)
+  patch(-6, -3, 40)
+  patch(6.5, -2, 40)
+  patch(-4.5, -7.5, 26, 4, 2.5)
+  patch(5, -7, 26, 4, 2.5)
   for (let z = 30; z < end; z += 45) {
-    patch(-(fairwayHalf(z) + 15), z, 10)
-    patch(fairwayHalf(z) + 15, z + 20, 10)
+    patch(-(fairwayHalf(z) + 15), z, 18)
+    patch(fairwayHalf(z) + 15, z + 20, 18)
   }
-  const treeMesh = instance(scene, treeGeometry(), trees.map(([x, z, s]) => ({ x, z, s, r: rand() * 6 })), ['#ffffff', '#e9ffd9', '#fff4d6', '#dff7ff'])
-  instance(scene, palmGeometry(), palms.map(([x, z, s, r]) => ({ x, z, s, r })), ['#ffffff', '#f2ffe6'])
-  const bushMesh = instance(scene, bushGeometry(), bushes.map(([x, z, s]) => ({ x, z, s, r: rand() * 6 })), ['#ffffff', '#e8ffe0', '#f0ffd0'])
-  const flowerMesh = instance(scene, new THREE.SphereGeometry(0.12, 5, 4), flowers.map(([x, z]) => ({ x, z, s: 0.8 + rand() * 0.6, y: 0.12 })), ['#ff7fae', '#ffe066', '#ffffff', '#c39bff', '#ff9a5a'], new THREE.MeshStandardMaterial({ color: '#ffffff' }))
+  // Trees: one in five is in flower (the coral accent); bushes likewise. Palms sway and flutter.
+  // Each kind has a detailed and a cheap version (flora.js): only what's near the camera is detailed.
+  const placed = (list, f) => list.map(([x, z, sc, r]) => ({ x, y: groundHeight(x, z) - 0.1, z: -z, s: sc, r: r ?? rand() * 6 })).filter(f ?? (() => true))
+  const treeMat = swayMaterial({ from: 3, to: 8.5, amp: 0.14 })
+  const isFlowering = (_, i) => i % 5 === 2
+  const bushMat = swayMaterial({ from: 0.3, to: 1.6, amp: 0.03 })
+  const palmMat = swayMaterial({ from: 5, to: 9, amp: 0.1, flutter: 0.05, centre: [3.2, 0], side: THREE.DoubleSide })
+  const flora = [
+    lodInstances(scene, { items: placed(trees, (t, i) => !isFlowering(t, i)), hi: treeGeometry({ seed: 1 }), lo: treeGeometry({ seed: 1, detail: 'low' }), mat: treeMat, tints: ['#ffffff', '#ecffdf', '#fff6dc', '#e2f7ff'], lightShare: 0.6 }),
+    lodInstances(scene, { items: placed(trees, isFlowering), hi: treeGeometry({ seed: 2, flowering: true }), lo: treeGeometry({ seed: 2, flowering: true, detail: 'low' }), mat: treeMat, tints: ['#ffffff', '#f4ffe8'], lightShare: 0.6 }),
+    lodInstances(scene, {
+      items: placed(palms),
+      hi: palmGeometry(),
+      lo: palmGeometry({ detail: 'low' }),
+      mat: palmMat,
+      tints: ['#ffffff', '#f2ffe6', '#fffbe8']
+    }),
+    lodInstances(scene, { items: placed(bushes, (b, i) => i % 3 !== 1), hi: bushGeometry({ seed: 1 }), lo: bushGeometry({ seed: 1, detail: 'low' }), mat: bushMat, tints: ['#ffffff', '#ecffe4', '#f4ffd8'], near: 45, lightShare: 0 }),
+    lodInstances(scene, { items: placed(bushes, (b, i) => i % 3 === 1), hi: bushGeometry({ seed: 2, flowering: true }), lo: bushGeometry({ seed: 2, flowering: true, detail: 'low' }), mat: bushMat, tints: ['#ffffff', '#f2ffe4'], near: 45, lightShare: 0 })
+  ]
+  flora.forEach((f) => f.update(null))
+  const flowerMesh = instance(scene, blossomGeometry(), flowers.map(([x, z]) => ({ x, z, s: 0.6 + rand() * 0.5, y: 0.18, r: rand() * 6 })), ['#ff7fae', '#ffe066', '#ffffff', '#c39bff', '#ff9a5a'], new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, side: THREE.DoubleSide }))
 
   // ---- the lighthouse point ----------------------------------------------------------------------
   const point = new THREE.Group()
@@ -233,25 +235,44 @@ export function createScenery(scene) {
     boats.push(b)
   }
 
-  addClouds(scene)
+  const clouds = addClouds(scene)
+  // Gulls wheeling over the beach and the far shore.
+  const gulls = createGulls(scene, [
+    { x: fairwayHalf(60) + 70, z: 60, y: 22, r: 22 },
+    { x: fairwayHalf(90) + 85, z: 95, y: 27, r: 30 },
+    { x: fairwayHalf(140) + 75, z: 140, y: 19, r: 18 },
+    { x: fairwayHalf(end) + 40, z: end + 60, y: 30, r: 34 },
+    { x: -30, z: end + 90, y: 26, r: 26 }
+  ])
+
+  // ---- the course: its fairways, traps, trees and buildings -----------------------------------------
+  // The course's own trees, palms and bushes share the range's materials, detail levels and breeze.
+  flora.push(...courseScenery(scene, { treeMat, bushMat, palmMat }))
 
   // ---- the tee ---------------------------------------------------------------------------------
-  const teeBox = new THREE.Mesh(
-    grassUVs(new THREE.LatheGeometry([[0, 0.07], [2.55, 0.07], [2.75, 0.04], [2.85, -0.02], [2.9, -0.06]].map(([x, y]) => new THREE.Vector2(x, y)), 40)),
-    grassMaterial({ color: COLORS.tee, stripes: true, stripe: 0.9, stripeAngle: Math.PI / 2, patch: 0.05, bump: 0.5, side: THREE.DoubleSide })
-  )
-  teeBox.position.set(0, 0, 0.4)
-  teeBox.receiveShadow = true
-  scene.add(teeBox)
-  const tee = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.01, 0.06, 8), new THREE.MeshStandardMaterial({ color: '#ffd23f' }))
-  tee.position.set(0, 0.09, 0)
-  scene.add(tee)
-  // Tee markers: two big glossy balls, and a basket of balls.
-  for (const s of [-1, 1]) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(0.18, 16, 12), new THREE.MeshStandardMaterial({ color: s < 0 ? '#ff5c8a' : '#2ad1c9', roughness: 0.3 }))
-    m.position.set(s * 2.1, 0.15, -1.6)
-    m.castShadow = true
-    scene.add(m)
+  // One at the range's tee and at every hole's: a rounded mown box, a tee peg and two big glossy
+  // ball markers.
+  const teeGeo = grassUVs(new THREE.LatheGeometry([[0, 0.07], [2.55, 0.07], [2.75, 0.04], [2.85, -0.02], [2.9, -0.06]].map(([x, y]) => new THREE.Vector2(x, y)), 40))
+  const teeMat = grassMaterial({ color: COLORS.tee, stripes: true, stripe: 0.9, stripeAngle: Math.PI / 2, patch: 0.05, bump: 0.5, side: THREE.DoubleSide })
+  const pegMat = new THREE.MeshStandardMaterial({ color: '#ffd23f' })
+  for (const { tee: at, cup } of [{ tee: { x: 0, z: 0 }, cup: { x: 0, z: 100 } }, ...HOLES]) {
+    // Turned to face its pin (three.js puts game z at -z).
+    const box = new THREE.Group()
+    box.position.set(at.x, 0, -at.z)
+    box.rotation.y = -Math.atan2(cup.x - at.x, cup.z - at.z)
+    scene.add(box)
+    const teeBox = new THREE.Mesh(teeGeo, teeMat)
+    teeBox.position.set(0, 0, 0.4)
+    teeBox.receiveShadow = true
+    const tee = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.01, 0.06, 8), pegMat)
+    tee.position.set(0, 0.09, 0)
+    box.add(teeBox, tee)
+    for (const s of [-1, 1]) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(0.18, 16, 12), new THREE.MeshStandardMaterial({ color: s < 0 ? '#ff5c8a' : '#2ad1c9', roughness: 0.3 }))
+      m.position.set(s * 2.1, 0.15, -1.6)
+      m.castShadow = true
+      box.add(m)
+    }
   }
   const basket = new THREE.Group()
   basket.add(new THREE.Mesh(new THREE.LatheGeometry([[0.12, 0], [0.24, 0.04], [0.3, 0.24], [0.28, 0.26]].map(([x, y]) => new THREE.Vector2(x, y)), 18), new THREE.MeshStandardMaterial({ color: '#d59a57', side: THREE.DoubleSide })))
@@ -293,15 +314,16 @@ export function createScenery(scene) {
   const putting = puttingGreen()
   putting.visible = false
   scene.add(putting)
-  // ---- the course's green, at the far end of the range (always there) -------------------------------
-  const courseGreen = puttingGreen(HOLE.green)
-  scene.add(courseGreen)
+  // ---- the course's greens (always there) --------------------------------------------------------------
+  for (const hole of HOLES) scene.add(puttingGreen(hole.green))
 
   // ---- tufts: grass standing up out of the rough, where the camera is close ----------------------------
   const tuftRand = rng(97)
   const tuftItems = []
   const roughTones = ['#74c04a', '#82c955', '#6bb543', '#8dd05c', '#99d866']
-  const tuft = (x, z, s = 1, tones = roughTones) => tuftItems.push({ x, z, y: groundHeight(x, z), s: s * (0.75 + tuftRand() * 0.6), r: tuftRand() * Math.PI, color: tones[Math.floor(tuftRand() * tones.length)] })
+  // No tufts on the course's greens or their fringes, or on a tee box.
+  const mown = (x, z) => HOLES.some((h) => greenReach(x, z, h.green) < 1 + h.green.fringe * 1.05 || Math.hypot(x - h.tee.x, z - h.tee.z) < 3.6 || [...h.sand, ...h.water].some((e) => ellipseReach(x, z, e) < 1.12))
+  const tuft = (x, z, s = 1, tones = roughTones) => !mown(x, z) && tuftItems.push({ x, z, y: groundHeight(x, z), s: s * (0.75 + tuftRand() * 0.6), r: tuftRand() * Math.PI, color: tones[Math.floor(tuftRand() * tones.length)] })
   // The rough either side of the fairway, thick near the tee and thinning out downrange.
   for (let i = 0; i < 2600; i++) {
     const z = -6 + Math.pow(tuftRand(), 1.8) * 170
@@ -332,9 +354,9 @@ export function createScenery(scene) {
   }
   const ringTufts = createTufts(ringItems)
   greens.add(ringTufts.mesh)
-  // Round the course's green.
-  for (let i = 0; i < 500; i++) {
-    const G = HOLE.green
+  // Round each of the course's greens.
+  for (let i = 0; i < 500 * HOLES.length; i++) {
+    const G = HOLES[i % HOLES.length].green
     const a = tuftRand() * Math.PI * 2
     const e = 1 + G.fringe * (1.05 + tuftRand() * 1.4)
     tuft(G.x + Math.cos(a) * G.rx * e, G.z + Math.sin(a) * G.rz * e, 1)
@@ -373,19 +395,23 @@ export function createScenery(scene) {
       tufts.mesh.visible = !light
       fringeTufts.mesh.visible = !light
       ringTufts.mesh.visible = !light
-      bushMesh.visible = !light
-      treeMesh.count = light ? Math.ceil(trees.length * 0.6) : trees.length
+      flora.forEach((f) => f.setLight(light)) // fewer trees, no bushes, all of them the cheap version
     },
-    /** Animate: flags wave (the lit green glows), boats bob, the lighthouse lamp pulses. */
-    update(dt, lit = -1) {
+    /** Animate (camera: its position, for the trees' detail): the breeze (trees, palms, flags), the sea, boats bob, the lit green's flag glows, the lighthouse lamp pulses. */
+    update(dt, lit = -1, camera = null) {
       clock += dt
+      flora.forEach((f) => f.update(camera))
+      wind.value = clock
+      sea.update(dt)
+      clouds.update(clock)
+      gulls.update(dt)
       tufts.update(dt)
       fringeTufts.update(dt)
       ringTufts.update(dt)
       greens.children.forEach((g, i) => {
         const f = g.userData.flag
         if (!f) return
-        f.rotation.y = Math.sin(clock * 2.2 + i) * 0.3
+        f.rotation.y = Math.sin(clock * 0.6 + i) * 0.15 // the breeze veers a little
         f.material.emissive.set(lit === i ? '#ffffff' : '#000000')
         f.material.emissiveIntensity = lit === i ? 0.35 + 0.25 * Math.sin(clock * 10) : 0
       })
@@ -399,6 +425,292 @@ export function createScenery(scene) {
 }
 
 // ---- pieces ----------------------------------------------------------------------------------------
+
+/**
+ * A big piece of ground, w × d metres centred on game (cx, cz), coloured by what it is: grass,
+ * the hills by their height, sand, the wet edge, and the seabed fading into the sea's blue.
+ */
+function landMesh(w, d, sw, sd, cx, cz) {
+  const land = new THREE.PlaneGeometry(w, d, sw, sd)
+  land.rotateX(-Math.PI / 2) // now x right, y up, z toward the camera (three space)
+  const pos = land.attributes.position
+  const colors = new Float32Array(pos.count * 3)
+  const c = new THREE.Color()
+  const lo = new THREE.Color(COLORS.hillLow)
+  const hi = new THREE.Color(COLORS.hillHigh)
+  const deep = new THREE.Color(COLORS.sea)
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i) + cx
+    const z = cz - pos.getZ(i)
+    pos.setX(i, x)
+    pos.setZ(i, -z)
+    const h = landHeight(x, z)
+    pos.setY(i, h)
+    const s = surfaceAt(x, z)
+    if (s === 'range') c.set(COLORS.rough)
+    else if (s === 'hill') c.copy(lo).lerp(hi, Math.min(1, Math.max(0, h / 22)))
+    else if (h > SEA_LEVEL + 0.35) c.set(h < SEA_LEVEL + 0.9 ? COLORS.wetSand : COLORS.sand)
+    else if (h > SEA_LEVEL - 0.05) c.set(COLORS.wetSand) // the sea's own foam laps over this
+    else c.set(COLORS.seabed).lerp(deep, Math.min(1, (SEA_LEVEL - h) / 3))
+    // A little variation so big areas don't look flat.
+    const n = 1 + 0.04 * Math.sin(x * 0.31) * Math.sin(z * 0.27)
+    colors.set([c.r * n, c.g * n, c.b * n], i * 3)
+  }
+  land.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+  land.computeVertexNormals()
+  grassUVs(land)
+  const ground = new THREE.Mesh(land, grassMaterial({ vertexColors: true, patch: 0.26 }))
+  ground.receiveShadow = true
+  return ground
+}
+
+/** A flat ellipse lying on the ground at height y (game space; rot in degrees, +x toward +z). */
+function groundEllipse(e, y, grow = 0, segments = 40) {
+  const g = new THREE.CircleGeometry(1, segments).rotateX(-Math.PI / 2)
+  g.scale(e.rx + grow, 1, e.rz + grow)
+  g.rotateY(((e.rot ?? 0) * Math.PI) / 180)
+  return g.translate(e.x, y, -e.z)
+}
+
+/** The inside of a trap, flat at height y: a fan out to its irregular edge, with UVs in metres. */
+function trapFill(e, y) {
+  const edge = trapOutline(e, 72)
+  const pos = []
+  const uv = []
+  const put = (p) => {
+    pos.push(p.x, y, -p.z)
+    uv.push(p.x / 5, p.z / 5)
+  }
+  edge.forEach((p, i) => {
+    const q = edge[(i + 1) % edge.length]
+    // Wound so it faces up (the outline runs clockwise seen from above once game z is three −z).
+    put(e)
+    put(p)
+    put(q)
+  })
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
+  g.computeVertexNormals()
+  return g
+}
+
+/**
+ * A band round a trap's edge, shaped by rows from the inside out: each { grow (m out from the
+ * edge), y (height), color }. Painted per row, so it shades from sand up into grass.
+ */
+function trapLip(e, rows) {
+  const n = 72
+  const loops = rows.map((r) => trapOutline(e, n, r.grow))
+  const pos = []
+  const col = []
+  const c = new THREE.Color()
+  const put = (k, i) => {
+    const p = loops[k][i % n]
+    pos.push(p.x, rows[k].y, -p.z)
+    c.set(rows[k].color)
+    col.push(c.r, c.g, c.b)
+  }
+  for (let k = 0; k + 1 < rows.length; k++) {
+    for (let i = 0; i < n; i++) {
+      put(k, i)
+      put(k + 1, i)
+      put(k, i + 1)
+      put(k + 1, i)
+      put(k + 1, i + 1)
+      put(k, i + 1)
+    }
+  }
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3))
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array((pos.length / 3) * 2), 2))
+  g.computeVertexNormals()
+  return g
+}
+
+/** Raked sand: a warm speckle with soft curved rake lines, tiling every 5 m. */
+function sandTexture() {
+  const size = 256
+  const cv = document.createElement('canvas')
+  cv.width = cv.height = size
+  const g = cv.getContext('2d')
+  g.fillStyle = COLORS.sand
+  g.fillRect(0, 0, size, size)
+  const rand = rng(7)
+  for (let i = 0; i < 2600; i++) {
+    g.fillStyle = rand() < 0.5 ? 'rgba(255,250,225,0.5)' : 'rgba(196,160,96,0.35)'
+    g.fillRect(rand() * size, rand() * size, 1 + rand() * 2, 1 + rand() * 2)
+  }
+  // Rake lines: gentle waves across, a light ridge beside a darker groove; they wrap at the edges.
+  for (let y = 4; y < size; y += 16) {
+    for (const [dy, style] of [[0, 'rgba(176,140,82,0.42)'], [3, 'rgba(255,248,220,0.5)']]) {
+      g.strokeStyle = style
+      g.lineWidth = 2.2
+      g.beginPath()
+      for (let x = 0; x <= size; x += 4) g.lineTo(x, y + dy + Math.sin((x / size) * Math.PI * 4) * 4)
+      g.stroke()
+    }
+  }
+  const t = new THREE.CanvasTexture(cv)
+  t.wrapS = t.wrapT = THREE.RepeatWrapping
+  t.colorSpace = THREE.SRGBColorSpace
+  t.anisotropy = 4
+  return t
+}
+
+/**
+ * The course's own scenery, on its ground south of the range (links.js): mown fairways and
+ * aprons, bunkers and beaches, the pond, trees on the hills and down the third hole's valley,
+ * palms along the shore, the lighthouse on the headland and the clubhouse.
+ */
+function courseScenery(scene, mats) {
+  const rand = rng(53)
+  // Fairways: a ribbon along each hole's line, round at the ends and the bend; an apron round each green.
+  const mownParts = []
+  for (const h of HOLES) {
+    for (let i = 0; i + 1 < h.fairway.length; i++) {
+      const a = h.fairway[i]
+      const b = h.fairway[i + 1]
+      const len = Math.hypot(b.x - a.x, b.z - a.z)
+      const strip = new THREE.PlaneGeometry(FAIRWAY_HALF * 2, len).rotateX(-Math.PI / 2)
+      // The strip runs along three −z (game +z); turn it onto the line from a to b.
+      strip.rotateY(-Math.atan2(b.x - a.x, b.z - a.z))
+      mownParts.push(strip.translate((a.x + b.x) / 2, 0.012, -(a.z + b.z) / 2))
+    }
+    for (const p of h.fairway) mownParts.push(groundEllipse({ x: p.x, z: p.z, rx: FAIRWAY_HALF, rz: FAIRWAY_HALF }, 0.012))
+    mownParts.push(groundEllipse({ x: h.green.x, z: h.green.z, rx: h.green.rx * APRON, rz: h.green.rz * APRON }, 0.012))
+  }
+  const mownGeo = mergeGeometries(mownParts.map((g) => g.toNonIndexed()))
+  grassUVs(mownGeo)
+  const mown = new THREE.Mesh(mownGeo, grassMaterial({ color: COLORS.fairway, stripes: true, stripe: 9, patch: 0.14, bump: 0.6 }))
+  mown.receiveShadow = true
+  scene.add(mown)
+
+  // Bunkers: an irregular pool of raked sand with a raised grass lip round it, so it reads as a
+  // hollow from any side. Ponds: the same shape of water inside a low bank.
+  const sandParts = []
+  const lipParts = []
+  const waterParts = []
+  for (const h of HOLES) {
+    for (const e of h.sand) {
+      sandParts.push(trapFill(e, 0.05))
+      lipParts.push(trapLip(e, [
+        { grow: 0, y: 0.05, color: '#d8bd78' }, // the sand's shaded face
+        { grow: 0.3, y: 0.3, color: '#e9d596' },
+        { grow: 0.55, y: 0.42, color: '#63b83f' }, // the crest of the lip, in grass
+        { grow: 1.1, y: 0.26, color: '#58ad3a' },
+        { grow: 2, y: 0.012, color: COLORS.rough }
+      ]))
+    }
+    for (const e of h.water) {
+      waterParts.push(trapFill(e, 0.04))
+      lipParts.push(trapLip(e, [
+        { grow: -0.5, y: 0.05, color: '#3f7f4a' }, // reeds' green at the water's edge
+        { grow: 0.25, y: 0.16, color: '#4f9c3c' },
+        { grow: 1.5, y: 0.012, color: COLORS.rough }
+      ]))
+    }
+  }
+  const flat = (parts, mat) => {
+    if (!parts.length) return
+    const m = new THREE.Mesh(mergeGeometries(parts), mat)
+    m.receiveShadow = true
+    scene.add(m)
+  }
+  flat(sandParts, new THREE.MeshStandardMaterial({ color: '#ffffff', map: sandTexture(), roughness: 1 }))
+  flat(lipParts, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }))
+  flat(waterParts, new THREE.MeshStandardMaterial({ color: COLORS.sea, roughness: 0.12, metalness: 0.05 }))
+
+  // Trees: thick on the hills, a loose line down each side of the third hole's valley, a few
+  // elsewhere. Palms along the shore. Nothing on the mown ground or in a trap.
+  const clear = (x, z, room) => ['rough', 'hill'].includes(lieAt(x, z)) && HOLES.every((h) => greenReach(x, z, h.green) > APRON + 0.5 && Math.hypot(x - h.tee.x, z - h.tee.z) > room && [...h.sand, ...h.water].every((e) => ellipseReach(x, z, e) > 1.5))
+  const trees = []
+  const palms = []
+  const bushes = []
+  for (const m of HILLS) {
+    const n = Math.round((m.rx * m.rz) / 120)
+    for (let i = 0; i < n; i++) {
+      const a = rand() * Math.PI * 2
+      const r = Math.sqrt(rand()) * 0.95
+      const [x, z] = [m.x + Math.cos(a) * m.rx * r, m.z + Math.sin(a) * m.rz * r]
+      if (clear(x, z, 9)) trees.push([x, z, 0.9 + rand() * 0.7])
+    }
+  }
+  const third = HOLES[2].fairway
+  for (let i = 0; i + 1 < third.length; i++) {
+    const a = third[i]
+    const b = third[i + 1]
+    const len = Math.hypot(b.x - a.x, b.z - a.z)
+    const [nx, nz] = [(b.z - a.z) / len, -(b.x - a.x) / len]
+    for (let d = 8; d < len; d += 13) {
+      for (const side of [-1, 1]) {
+        const off = side * (FAIRWAY_HALF + 6 + rand() * 7)
+        const [x, z] = [a.x + ((b.x - a.x) * d) / len + nx * off, a.z + ((b.z - a.z) * d) / len + nz * off]
+        if (clear(x, z, 9)) trees.push([x, z, 1 + rand() * 0.5])
+        if (rand() < 0.5 && clear(x + nx * side * 5, z + nz * side * 5, 9)) bushes.push([x + nx * side * 5, z + nz * side * 5, 0.8 + rand() * 0.6])
+      }
+    }
+  }
+  // Far hills to the west and south: scattered trees closing the view.
+  for (let i = 0; i < 160; i++) {
+    const [x, z] = [-520 + rand() * 520, -760 + rand() * 660]
+    if ((x < -240 || z < -480) && clear(x, z, 9) && shoreDistance(x, z) > 30) trees.push([x, z, 0.9 + rand() * 0.8])
+  }
+  // Palms a little inland of the shore, from the range's end of the bay round the headland and down the cliff.
+  for (let i = 0; i + 1 < COAST.length - 2; i++) {
+    const [ax, az] = COAST[i]
+    const [bx, bz] = COAST[i + 1]
+    const len = Math.hypot(bx - ax, bz - az)
+    for (let d = rand() * 14; d < len; d += 14 + rand() * 16) {
+      // Inland is to the right of the shore's direction (north to south, land to the west).
+      const off = 12 + rand() * 9
+      const [x, z] = [ax + ((bx - ax) * d) / len + ((bz - az) / len) * off, az + ((bz - az) * d) / len - ((bx - ax) / len) * off]
+      if (shoreDistance(x, z) > 9 && clear(x, z, 9)) palms.push([x, z, 0.85 + rand() * 0.35, rand() * Math.PI * 2])
+    }
+  }
+  // Detailed near the camera, cheap further away (flora.js); one in five trees and bushes in flower.
+  const placed = (list, f) => list.map(([x, z, sc, r]) => ({ x, y: groundHeight(x, z) - 0.1, z: -z, s: sc, r: r ?? rand() * 6 })).filter(f ?? (() => true))
+  const flowering = (_, i) => i % 5 === 2
+  const flora = [
+    lodInstances(scene, { items: placed(trees, (t, i) => !flowering(t, i)), hi: treeGeometry({ seed: 3 }), lo: treeGeometry({ seed: 3, detail: 'low' }), mat: mats.treeMat, tints: ['#ffffff', '#ecffdf', '#fff6dc', '#e2f7ff'], lightShare: 0.6 }),
+    lodInstances(scene, { items: placed(trees, flowering), hi: treeGeometry({ seed: 2, flowering: true }), lo: treeGeometry({ seed: 2, flowering: true, detail: 'low' }), mat: mats.treeMat, tints: ['#ffffff', '#f4ffe8'], lightShare: 0.6 }),
+    lodInstances(scene, { items: placed(palms), hi: palmGeometry(), lo: palmGeometry({ detail: 'low' }), mat: mats.palmMat, tints: ['#ffffff', '#f2ffe6', '#fffbe8'] }),
+    lodInstances(scene, { items: placed(bushes, (b, i) => i % 3 !== 1), hi: bushGeometry({ seed: 1 }), lo: bushGeometry({ seed: 1, detail: 'low' }), mat: mats.bushMat, tints: ['#ffffff', '#ecffe4', '#f4ffd8'], near: 45, lightShare: 0 }),
+    lodInstances(scene, { items: placed(bushes, (b, i) => i % 3 === 1), hi: bushGeometry({ seed: 2, flowering: true }), lo: bushGeometry({ seed: 2, flowering: true, detail: 'low' }), mat: mats.bushMat, tints: ['#ffffff', '#f2ffe4'], near: 45, lightShare: 0 })
+  ]
+  flora.forEach((f) => f.update(null))
+
+  // The lighthouse on the headland's tip, on a low rocky base.
+  const tip = new THREE.Group()
+  tip.position.set(203, 0, 236)
+  tip.add(merged([[0, 0, 0, 7], [5, -0.4, 3, 4.5], [-4, -0.4, -3, 5]].map(([x, y, z, r]) => [at(new THREE.SphereGeometry(1, 14, 10), x, y, z, r, r * 0.3, r), '#b9a48f'])))
+  const lh = lighthouse()
+  lh.position.y = 1.6
+  tip.add(lh)
+  scene.add(tip)
+
+  // The clubhouse, south-west of the first tee: cream walls, a terracotta roof, a veranda.
+  const house = new THREE.Group()
+  house.position.set(-140, 0, 398)
+  house.rotation.y = -0.5
+  house.add(
+    merged([
+      [new THREE.BoxGeometry(20, 5, 11).translate(0, 2.5, 0), '#fff4dc'],
+      [new THREE.CylinderGeometry(0.1, 9.2, 5, 4, 1).rotateY(Math.PI / 4).scale(1.75, 1, 1).translate(0, 7.4, 0), '#e8703f'],
+      [new THREE.BoxGeometry(22, 0.35, 4).translate(0, 3.6, 7.2), '#e8703f'],
+      ...[-9, -3, 3, 9].map((x) => [new THREE.CylinderGeometry(0.22, 0.22, 3.6, 8).translate(x, 1.8, 8.8), '#fff8ec']),
+      [new THREE.BoxGeometry(2.2, 3.4, 0.2).translate(0, 1.7, 5.6), '#2a6fb0'],
+      ...[-6.5, 6.5].map((x) => [new THREE.BoxGeometry(3, 1.8, 0.2).translate(x, 2.9, 5.6), '#9fd8ff'])
+    ])
+  )
+  house.traverse((o) => {
+    o.castShadow = true
+    o.receiveShadow = true
+  })
+  scene.add(house)
+  return flora
+}
 
 /**
  * The putting green (putting.js has its shape): mown stripes, lighter where it's higher, a darker
@@ -508,54 +820,6 @@ function instance(scene, geo, items, tints, mat = new THREE.MeshStandardMaterial
   return mesh
 }
 
-/** A puffy tree: a short trunk and a crown of soft balls, darker underneath. */
-function treeGeometry() {
-  const leafLo = new THREE.Color('#2f8f3a')
-  const leafHi = new THREE.Color('#7fd65a')
-  const leaf = (v) => leafLo.clone().lerp(leafHi, Math.min(1, Math.max(0, (v.y - 3.2) / 4)))
-  const trunk = paint(at(new THREE.CylinderGeometry(0.38, 0.6, 4.2, 7), 0, 2.1, 0), '#9b6a3e')
-  const crown = [
-    [0, 5.4, 0, 2.5],
-    [1.7, 4.8, 0.5, 1.8],
-    [-1.6, 4.9, -0.4, 1.9],
-    [0.3, 6.9, 0.2, 1.8],
-    [-0.4, 4.7, 1.5, 1.6],
-    [0.6, 4.6, -1.5, 1.6]
-  ].map(([x, y, z, r]) => paint(at(new THREE.SphereGeometry(1, 7, 5), x, y, z, r), leaf))
-  return mergeGeometries([trunk, ...crown])
-}
-
-/** A palm: a curved, ringed trunk and drooping fronds, with coconuts. */
-function palmGeometry() {
-  const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.6, 3, 0), new THREE.Vector3(1.8, 6, 0), new THREE.Vector3(3.2, 8.4, 0)])
-  const trunk = paint(new THREE.TubeGeometry(curve, 10, 0.32, 6), (v) => new THREE.Color(Math.round(v.y * 2.2) % 2 ? '#b07a45' : '#c48d55'))
-  const top = curve.getPoint(1)
-  const parts = [trunk]
-  for (let i = 0; i < 7; i++) {
-    const a = (i / 7) * Math.PI * 2
-    const f = new THREE.SphereGeometry(1, 6, 3)
-    f.scale(2.6, 0.13, 0.55).translate(2.2, -0.35, 0)
-    f.rotateZ(-0.35 - (i % 2) * 0.15)
-    f.rotateY(a)
-    f.translate(top.x, top.y, top.z)
-    parts.push(paint(f, (v) => new THREE.Color('#2f9e44').lerp(new THREE.Color('#7fd65a'), Math.min(1, Math.max(0, v.y - top.y + 1.2) / 1.4))))
-  }
-  for (let i = 0; i < 3; i++) parts.push(paint(at(new THREE.SphereGeometry(0.28, 8, 6), top.x + Math.cos(i * 2.1) * 0.35, top.y - 0.35, Math.sin(i * 2.1) * 0.35), '#6b4a2b'))
-  return mergeGeometries(parts)
-}
-
-function bushGeometry() {
-  const leaf = (v) => new THREE.Color('#3a9d3f').lerp(new THREE.Color('#86d95e'), Math.min(1, Math.max(0, v.y / 1.4)))
-  return mergeGeometries(
-    [
-      [0, 0.6, 0, 0.9],
-      [0.8, 0.45, 0.2, 0.65],
-      [-0.75, 0.45, -0.1, 0.7],
-      [0.1, 0.4, 0.75, 0.6]
-    ].map(([x, y, z, r]) => paint(at(new THREE.SphereGeometry(1, 6, 4), x, y, z, r), leaf))
-  )
-}
-
 function flagPole(color) {
   const group = new THREE.Group()
   // A striped pole and a gold knob: one mesh.
@@ -568,11 +832,8 @@ function flagPole(color) {
   )
   pole.castShadow = true
   group.add(pole)
-  const tri = new THREE.Shape()
-  tri.moveTo(0, 0)
-  tri.quadraticCurveTo(1.8, 0.2, 3.4, -0.95)
-  tri.quadraticCurveTo(1.8, -1.6, 0, -1.9)
-  const flag = new THREE.Mesh(new THREE.ShapeGeometry(tri, 8), new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide, emissive: '#000000' }))
+  // A cloth pennant (cloth.js): it ripples from the pole to the tip.
+  const flag = new THREE.Mesh(pennantGeometry(3.4, 1.9), clothMaterial({ color, emissive: '#000000' }, 3.4))
   flag.position.y = 6.9
   group.add(flag)
   return { group, flag }
@@ -618,6 +879,32 @@ function sailboat(color) {
   return g
 }
 
+/** The resort's candy colours, for the soft-play dressing (the yardage boards' posts). */
+const CANDY = ['#ff5c8a', '#ffd23f', '#2ad1c9', '#8f6bff', '#ff8a3d']
+
+/** A short candy-striped post with a soft ball on top, at x (parts for merged()). */
+function candyPost(x, seed = 0) {
+  const c = CANDY[(Math.abs(Math.round(x)) + seed / 50) % CANDY.length]
+  return [
+    [new THREE.CapsuleGeometry(0.22, 1.3, 6, 16).translate(x, 0.85, 0), (v) => new THREE.Color(Math.floor((v.y + 0.1) / 0.32) % 2 ? c : '#fff8ec')],
+    [new THREE.SphereGeometry(0.36, 20, 14).translate(x, 1.86, 0), c]
+  ]
+}
+
+/** A five-petal blossom facing up on a short stem, with a pale centre (tinted per copy), about 0.3 m across at full size. */
+function blossomGeometry() {
+  const parts = []
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2
+    const p = new THREE.SphereGeometry(1, 8, 6)
+    p.scale(0.075, 0.03, 0.05).translate(0.075, 0, 0).rotateZ(0.25).rotateY(a)
+    parts.push(paint(p, '#ffffff'))
+  }
+  parts.push(paint(new THREE.SphereGeometry(0.04, 8, 6).scale(1, 0.7, 1).translate(0, 0.02, 0), '#fff2b8'))
+  parts.push(paint(new THREE.CylinderGeometry(0.008, 0.01, 0.14, 5).translate(0, -0.07, 0), '#3f9a3a'))
+  return mergeGeometries(parts)
+}
+
 /** A rounded wooden board on two posts, with the yardage painted on a cream disc. */
 function yardBoard(yd) {
   const cv = document.createElement('canvas')
@@ -641,7 +928,10 @@ function yardBoard(yd) {
     merged([
       [new RoundedBoxGeometry(5.6, 3.6, 0.35, 3, 0.3).translate(0, 4.4, 0), '#c98b4f'],
       [new THREE.CapsuleGeometry(0.2, 2.6, 4, 8).translate(-1.8, 1.4, 0), '#c98b4f'],
-      [new THREE.CapsuleGeometry(0.2, 2.6, 4, 8).translate(1.8, 1.4, 0), '#c98b4f']
+      [new THREE.CapsuleGeometry(0.2, 2.6, 4, 8).translate(1.8, 1.4, 0), '#c98b4f'],
+      // Candy-striped posts either side, with a soft ball on top: the soft-play look.
+      ...candyPost(-3.5, yd),
+      ...candyPost(3.5, yd)
     ])
   )
   const face = new THREE.Mesh(new THREE.PlaneGeometry(5, 3.1), new THREE.MeshStandardMaterial({ map: t, transparent: true }))
@@ -651,32 +941,74 @@ function yardBoard(yd) {
   return grp
 }
 
+/** Puffy clouds, drifting slowly across the sky; each one shrinks away at the edge of the sky before it wraps round. */
 function addClouds(scene) {
-  const mat = new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#ffffff', emissiveIntensity: 0.4, fog: false })
-  const geo = new THREE.SphereGeometry(1, 12, 8)
+  // Smooth puffs with flat, tucked-under bottoms: bright on top, a soft lavender-blue underneath
+  // (vertex colours, which also tint the glow, so the undersides stay cool).
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, emissive: '#ffffff', emissiveIntensity: 0.45, roughness: 1, fog: false })
+  mat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance *= vColor.rgb;')
+  }
+  mat.customProgramCacheKey = () => 'cloud-under'
+  const geo = new THREE.SphereGeometry(1, 24, 14)
+  {
+    const p = geo.attributes.position
+    const col = new Float32Array(p.count * 3)
+    const top = new THREE.Color('#ffffff')
+    const under = new THREE.Color('#c6cff0')
+    const c = new THREE.Color()
+    for (let i = 0; i < p.count; i++) {
+      let y = p.getY(i)
+      if (y < 0) p.setY(i, (y *= 0.38)) // flat underneath
+      c.copy(under).lerp(top, THREE.MathUtils.smoothstep(y, -0.3, 0.55))
+      col.set([c.r, c.g, c.b], i * 3)
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
+    geo.computeVertexNormals()
+  }
   const puffs = []
+  const clouds = []
   const rand = rng(5)
-  for (let ci = 0; ci < 9; ci++) {
+  for (let ci = 0; ci < 11; ci++) {
     const x = (rand() - 0.5) * 1600
     const z = -(300 + rand() * 900)
     const y = 110 + rand() * 120
     const n = 4 + Math.floor(rand() * 3)
-    for (let i = 0; i < n; i++) puffs.push([x + (i - n / 2) * 26, y + rand() * 14, z + rand() * 20, 22 + rand() * 16])
+    clouds.push({ x, speed: 1.2 + rand() * 1.4 })
+    // A row of big puffs along the bottom, smaller ones heaped on top.
+    for (let i = 0; i < n; i++) puffs.push({ cloud: ci, dx: (i - (n - 1) / 2) * 24, y: y + rand() * 4, z: z + rand() * 20, s: 22 + rand() * 12 })
+    for (let i = 0; i < n - 2; i++) puffs.push({ cloud: ci, dx: (i - (n - 3) / 2) * 22 + (rand() - 0.5) * 8, y: y + 12 + rand() * 8, z: z + 4 + rand() * 10, s: 16 + rand() * 10 })
   }
   const mesh = new THREE.InstancedMesh(geo, mat, puffs.length)
+  mesh.frustumCulled = false
   const d = new THREE.Object3D()
-  puffs.forEach(([x, y, z, s], i) => {
-    d.position.set(x, y, z)
-    d.scale.set(s, s * 0.65, s * 0.8)
-    d.updateMatrix()
-    mesh.setMatrixAt(i, d.matrix)
-  })
+  const EDGE = 900
+  const place = (t) => {
+    puffs.forEach((p, i) => {
+      const c = clouds[p.cloud]
+      const cx = ((((c.x + t * c.speed + EDGE) % (2 * EDGE)) + 2 * EDGE) % (2 * EDGE)) - EDGE
+      const k = 1 - THREE.MathUtils.smoothstep(Math.abs(cx), EDGE - 160, EDGE)
+      d.position.set(cx + p.dx, p.y, p.z)
+      d.scale.set(p.s * k + 1e-3, p.s * 0.65 * k + 1e-3, p.s * 0.8 * k + 1e-3)
+      d.updateMatrix()
+      mesh.setMatrixAt(i, d.matrix)
+    })
+    mesh.instanceMatrix.needsUpdate = true
+  }
+  place(0)
   scene.add(mesh)
+  return { update: place }
 }
 
 // ---- the resort's props (shared/resort: Meshy models) --------------------------------------------
 
 /** Where the beach huts stand (game space): on the dunes along the right, facing the range. */
+/** The huts behind the course's second green: [x, z, turn (radians: 0 faces three +z, game −z)]. */
+const COURSE_HUTS = [
+  [10, -128, 0.25],
+  [22, -124, 0],
+  [34, -125, -0.25]
+]
 const HUT_COLORS = ['#3fcfa6', '#ff8a9a', '#ffd25c', '#6cc3ff', '#b79cff']
 /**
  * Load the resort's props and put them in the scene: a row of beach huts on the dunes (one model,
@@ -701,6 +1033,19 @@ export async function addProps(scene, base) {
     holder.scale.setScalar(hutScale)
     holder.position.set(x, groundHeight(x, z) - 0.05, -z)
     holder.rotation.y = -Math.PI / 2 + (i % 2 ? 0.08 : -0.08)
+    h.castShadow = true
+    h.receiveShadow = true
+    group.add(holder)
+  }
+  // And three behind the second hole's green on the course, facing it across the beach.
+  for (const [x, z, turn] of COURSE_HUTS) {
+    const h = hutMesh.clone()
+    h.material = hueShifted(hutMesh.material, 160 / 360, HUT_COLORS[i++ % HUT_COLORS.length])
+    const holder = new THREE.Group()
+    holder.add(h)
+    holder.scale.setScalar(hutScale)
+    holder.position.set(x, groundHeight(x, z) - 0.05, -z)
+    holder.rotation.y = turn
     h.castShadow = true
     h.receiveShadow = true
     group.add(holder)

@@ -16,7 +16,7 @@
 // party.view(id) (only that phone: is it your shot, your club and aim, your last shot), the rest
 // stays on the TV.
 import { input } from './input.js'
-import { createMenu } from './menu.js'
+import { createMenu, QUIT_TO_LIBRARY } from './menu.js'
 import { fitCanvas } from './fit.js'
 import { createAudio } from './audio.js'
 import { createSave, createSettings } from './save.js'
@@ -31,9 +31,10 @@ import { createView } from './view3d.js'
 import { createSfx } from './sfx.js'
 import { readPhoneSwing, settle, strike, strokePower } from './shot.js'
 import { fairwayHalf, groundHeight, lieAt } from './terrain.js'
-import { clubFor, courseStandings, HOLE, MAX_STROKES, nextToPlay, scoreName, yardsToPin } from './course.js'
+import { clubFor, COURSE, courseStandings, HOLES, holeYards, MAX_STROKES, nextToPlay, roundTotal, scoreName, toPar, yardsToPin } from './course.js'
 import { greenReach } from './green.js'
 import { scoreLanding, standings } from './targets.js'
+import { LEVEL_OPTIONS, levelId, LEVELS, levelOf } from './levels.js'
 import { bearing, describePutt, FT, GREEN, holeAt, planPutt, practicePutt, previewPutt, puttHeight, puttSpeed, puttStandings, puttStroke, readPutt, rollPutt, settlePutt, startLine } from './putting.js'
 
 const ID = 'big-swing-golf'
@@ -71,8 +72,12 @@ for (const [family, file, weight] of [
   f.load().then((loaded) => document.fonts.add(loaded)).catch(() => {})
 }
 
-const settings = createSettings(ID, { graphics: 'auto', mode: 'practice', strength: 'normal', assist: 'some', hand: 'R', flipFace: false })
-if (settings.data.graphics && settings.data.graphics !== 'auto') view.setGraphics(settings.data.graphics)
+// Graphics: High on a real GPU, Low with none (a software renderer). Saves from before 0.14 may
+// say 'auto', which is that same default now.
+const GRAPHICS_DEFAULT = view.software ? 'low' : 'high'
+const settings = createSettings(ID, { graphics: GRAPHICS_DEFAULT, mode: 'practice', hand: 'R', flipFace: false, hints: 'auto' })
+if (settings.data.graphics !== 'high' && settings.data.graphics !== 'low') settings.data.graphics = GRAPHICS_DEFAULT
+view.setGraphics(settings.data.graphics)
 const ts = () => settings.data.textScale ?? 1
 const head = (px) => `${Math.round(px * ts())}px 'Lilita One', 'Arial Rounded MT Bold', system-ui, sans-serif`
 const body = (px, w = 700) => `${w} ${Math.round(px * ts())}px Rubik, system-ui, sans-serif`
@@ -98,12 +103,14 @@ function fitFont(make, px, room, ...strs) {
 }
 const audio = createAudio({ settings })
 const sfx = createSfx(audio)
-const save = createSave(ID, 1, { longest: {}, targetsBest: {}, shots: 0, puttBest: {}, longestPutt: {}, courseBest: {} })
+const save = createSave(ID, 1, { longest: {}, targetsBest: {}, shots: 0, puttBest: {}, longestPutt: {}, courseBest: {}, roundBest: {} })
 save.data.puttBest ??= {} // saves from before the putting green
 save.data.longestPutt ??= {}
 save.data.outfits ??= {} // player name → { hat, top, acc }
 save.data.hands ??= {} // player name → 'R' | 'L', picked on the phone
-save.data.courseBest ??= {} // player name → fewest strokes on the course's hole
+save.data.levels ??= {} // player name → 'easy' | 'normal' | 'pro' (levels.js)
+save.data.courseBest ??= {} // (until 0.10: fewest strokes on the one test hole)
+save.data.roundBest ??= {} // player name → fewest strokes over the course's round
 
 const party = createParty({ input, minPlayers: 1, maxPlayers: 4 })
 const lobby = createPartyLobby(party, input, { title: 'Big Swing Golf', accent: GOLD, panel: 'rgba(11,26,54,0.86)' })
@@ -116,9 +123,9 @@ const state = {
   resumeTo: 'playing',
   mode: ['targets', 'putting', 'putts', 'course'].includes(settings.data.mode) ? settings.data.mode : 'practice',
   hole: 0, // Putting challenge: which of the nine
-  seats: [], // { id, name, color, crew, kind: 'phone' | 'local' | 'tv', club, aim, shots: [], hand }
+  seats: [], // { id, name, color, crew, kind: 'phone' | 'local' | 'tv', club, aim, shots: [], hand, level }
   turn: 0,
-  phase: 'aim', // safety | aim | meter | flight | result
+  phase: 'aim', // lineup | aim | meter | flight | result
   meter: null, // { stage: 'power' | 'accuracy', v, power }
   flick: null,
   shot: null, // the ball in the air: { result, t, landed, seat, input }
@@ -128,10 +135,12 @@ const state = {
   resultTime: 0,
   lit: -1, // the green that was just hit
   recent: [], // the session's shots for the map: { x, z, color }
-  safe: new Set(), // phones that have read the safety card this party
-  safetyTime: 0
+  safe: new Set(), // phones that have read the safety tips this party
+  ready: new Set(), // seats that said I'm ready in this game's Line-up
+  tipsGame: false, // this Line-up shows the safety tips (someone hasn't read them yet this party)
+  lineupTime: 0
 }
-window.__game = { state, TUNING, party, settings, view, get titleMenu() { return titleMenu }, get wardrobeMenu() { return wardrobeMenu }, get pickMenu() { return pickMenu }, get pauseMenu() { return pauseMenu }, get pauseButton() { return PAUSE_BUTTON }, get settingsMenu() { return settingsScreen.menu }, get overflow() { return overflow } }
+window.__game = { state, TUNING, party, settings, view, get titleMenu() { return titleMenu }, get wardrobeMenu() { return wardrobeMenu }, get pickMenu() { return pickMenu }, get pauseMenu() { return pauseMenu }, get overMenu() { return overMenu }, get pauseButton() { return PAUSE_BUTTON }, get settingsMenu() { return settingsScreen.menu }, get overflow() { return overflow }, get hud() { return hud } }
 const debug = new URLSearchParams(location.search).has('debug')
 
 const MODES = [
@@ -139,7 +148,7 @@ const MODES = [
   { value: 'targets', label: 'Target challenge', title: 'Target challenge · 10 balls' },
   { value: 'putting', label: 'Putting practice', title: 'Putting green: practice' },
   { value: 'putts', label: 'Putting challenge', title: 'Putting challenge · 9 holes' },
-  { value: 'course', label: 'The course', title: `Course: ${HOLE.name} · par ${HOLE.par}` }
+  { value: 'course', label: 'The course', title: `Course: ${HOLES.length} holes · par ${COURSE.par}` }
 ]
 const HANDS = [
   { value: 'R', label: 'Right-handed' },
@@ -152,9 +161,12 @@ const titleMenu = createMenu(
     { id: 'wardrobe', label: 'Wardrobe' },
     { id: 'settings', label: 'Settings' }
   ],
-  // The clubhouse rail: a column of tiles down the left (drawn by drawTitle()).
-  { y: 250, width: 330, height: 70, gap: 12, accent: GOLD }
+  // The clubhouse rail: a column of tiles down the left (drawn by drawTitle()). Inside the
+  // launcher a fifth tile, Quit to library, goes back to the games (menu.js adds it there only).
+  { y: 250, width: 330, height: 70, gap: 12, accent: GOLD, quitToLibrary: true }
 )
+/** menu.js lifts a menu half a row when it adds Quit to library; the rail keeps its top under the logo. */
+const titleLift = titleMenu.items.some((i) => i.id === QUIT_TO_LIBRARY) ? (70 + 12) / 2 : 0
 /** The TV's own wardrobe, for playing on this screen: the first crew bean's outfit (saved by name). */
 const wardrobeMenu = createMenu(
   [
@@ -178,7 +190,7 @@ const MODE_SHORT = {
   targets: 'Ten balls at five ringed greens',
   putting: 'A fresh putt every turn',
   putts: 'Nine holes on the green, fewest putts',
-  course: `One hole by the sea, par ${HOLE.par}`
+  course: `${HOLES.length} holes by the sea, par ${COURSE.par}`
 }
 const MODE_ICON = { practice: '🏌️', targets: '🎯', putting: '⛳', putts: '🏆', course: '🌊' }
 /**
@@ -190,33 +202,38 @@ const pickMenu = createMenu(
   [...MODES.map((m) => ({ id: m.value, label: m.label, sub: MODE_SHORT[m.value], icon: MODE_ICON[m.value] })), { id: 'back', label: 'Back' }],
   { y: 250, width: 330, height: 70, gap: 12, accent: GOLD }
 )
+/** The level of whoever is up (labelled with their name when the menu opens): any seat can change it mid-game. */
+const PAUSE_LEVEL = { id: 'level', label: 'Difficulty', type: 'choice', value: 'normal', options: LEVEL_OPTIONS, onChange: (v) => seat() && pickLevel(seat(), v) }
 const pauseMenu = createMenu(
   [
     { id: 'resume', label: 'Resume' },
+    PAUSE_LEVEL,
     { id: 'restart', label: 'Restart' },
     { id: 'pick', label: 'Choose a game' },
     { id: 'settings', label: 'Settings' },
     { id: 'title', label: 'Quit to title' }
   ],
-  { y: H / 2 - 110, accent: GOLD }
+  // The clubhouse rail, as on the title (drawPause()); Quit to library joins it in the launcher.
+  // A little shorter than the title's tiles: with the level row and Quit to library that's seven.
+  { y: 236, width: 330, height: 62, gap: 10, accent: GOLD }
 )
+const pauseLift = pauseMenu.items.some((i) => i.id === QUIT_TO_LIBRARY) ? (62 + 10) / 2 : 0
 const overMenu = createMenu(
   [
     { id: 'again', label: 'Play again' },
     { id: 'pick', label: 'Choose a game' },
     { id: 'title', label: 'Quit to title' }
   ],
-  { y: 560, accent: GOLD }
+  { y: 560, width: 420, height: 60, gap: 12, accent: GOLD }
 )
 const settingsScreen = createSettingsScreen({
   settings,
   audio,
   width: 600, // the clubhouse look: a column of tiles, with the card beside it (drawSettings)
   extra: [
-    { id: 'graphics', label: 'Graphics', type: 'choice', value: settings.data.graphics ?? 'auto', options: [{ value: 'auto', label: 'Auto' }, { value: 'high', label: 'High' }, { value: 'low', label: 'Low' }], onChange: (v) => view.setGraphics(v) },
-    { id: 'strength', label: 'Swing power needed', type: 'choice', value: settings.data.strength, options: [{ value: 'easy', label: 'Less' }, { value: 'normal', label: 'Normal' }, { value: 'strong', label: 'More' }] },
-    { id: 'assist', label: 'Straight shot help', type: 'choice', value: settings.data.assist, options: [{ value: 'off', label: 'Off' }, { value: 'some', label: 'Some' }, { value: 'lots', label: 'Lots' }] },
-    { id: 'flipFace', label: 'Flip hook and slice', type: 'toggle', value: settings.data.flipFace }
+    { id: 'graphics', label: 'Graphics', type: 'choice', value: settings.data.graphics, options: [{ value: 'high', label: 'High' }, { value: 'low', label: 'Low' }], onChange: (v) => view.setGraphics(v) },
+    { id: 'flipFace', label: 'Flip hook and slice', type: 'toggle', value: settings.data.flipFace },
+    { id: 'hints', label: 'Button hints', type: 'choice', value: settings.data.hints ?? 'auto', options: [{ value: 'auto', label: 'Auto' }, { value: 'always', label: 'Always' }, { value: 'off', label: 'Off' }] }
   ]
 })
 
@@ -239,6 +256,7 @@ function layout() {
   H = fit.h
   DY = Math.round((H - MIN_H) / 2)
   view.resize(W, H)
+  view.setSharpness(fit.scale * fit.dpr) // High: as many pixels as the screen shows
   Object.assign(PAUSE_BUTTON, { x: W - 88, y: 32 })
   Object.assign(TOUCH.aimL, { x: 40, y: H - 110 })
   Object.assign(TOUCH.aimR, { x: 124, y: H - 110 })
@@ -246,10 +264,10 @@ function layout() {
   Object.assign(TOUCH.clubR, { x: W - 116, y: H - 110 })
   Object.assign(SAFETY_OK, { x: W / 2 - 110, y: 676 + DY })
   // The rail: centred in the left column; the menus inside it start under the logo.
-  titleMenu.place({ x: RAIL.w / 2, y: 244 + DY })
+  titleMenu.place({ x: RAIL.w / 2, y: 244 + DY + titleLift })
   wardrobeMenu.place({ x: RAIL.w / 2, y: 244 + DY })
   pickMenu.place({ x: RAIL.w / 2, y: 236 + DY })
-  pauseMenu.place({ x: W / 2, y: H / 2 - 110 })
+  pauseMenu.place({ x: RAIL.w / 2, y: 206 + DY + pauseLift })
   overMenu.place({ x: W / 2, y: 560 + DY })
   settingsScreen.place({ x: W / 2, y: 190 + DY })
 }
@@ -272,7 +290,7 @@ const newSeat = (p, i) => {
   const look = { id: `${p.id}:${crew.id}`, color: crew.color, outfit: { ...crew.outfit, ...save.data.outfits[p.name] } }
   // Putting: ball and cup where this seat's next putt is from and to, paim its aim off the line to
   // the cup, card the challenge's putts per hole, strokes this hole, done when it's holed out.
-  return { id: p.id, name: p.name, color: crew.color, crew, look, kind: p.kind, club: 0, aim: 0, shots: [], hand: p.kind === 'phone' ? (save.data.hands[p.name] ?? 'R') : settings.data.hand, handPicked: p.kind === 'phone' && Boolean(save.data.hands[p.name]), ball: null, cup: null, paim: 0, card: [], strokes: 0, done: false }
+  return { id: p.id, name: p.name, color: crew.color, crew, look, kind: p.kind, club: 0, aim: 0, shots: [], hand: p.kind === 'phone' ? (save.data.hands[p.name] ?? 'R') : settings.data.hand, level: levelId(save.data.levels[p.name]), handPicked: p.kind === 'phone' && Boolean(save.data.hands[p.name]), ball: null, cup: null, paim: 0, card: [], strokes: 0, done: false }
 }
 /** The title screen's crew: the first bean (dressed in the TV's wardrobe, by its name) and three more. */
 const TITLE_LOOK = { id: 'title', color: CREW[0].color, outfit: { ...CREW[0].outfit, ...save.data.outfits[CREW[0].name] } }
@@ -297,6 +315,20 @@ function pickHand(s, hand) {
   sfx.blip()
   publish()
 }
+/** A player picks their level (phone Wardrobe, or the pause menu for whoever is up): remembered by name. */
+function pickLevel(s, id) {
+  if (!LEVELS.includes(id) || s.level === id) return
+  s.level = id
+  save.data.levels[s.name] = id
+  save.save()
+  // A putt being lined up: the read (aim on the break, the guide) follows the new level at once.
+  if (isPutting() && s === seat() && s.ball && s.cup) setupPutt(s)
+  view.react(s.look, 'happy')
+  sfx.blip()
+  publish()
+}
+/** Everything the seat's level decides (levels.js): swing power, straight help, the putt read, meter, cup, gimme. */
+const lvl = (s) => levelOf(s?.level)
 /** A wardrobe change from a phone: only known pieces, slot by slot. */
 function dress(s, change) {
   let changed = false
@@ -317,21 +349,33 @@ function dress(s, change) {
 const isTargets = () => state.mode === 'targets'
 const isCourse = () => state.mode === 'course'
 /** On the course: on the green, its fringe, or just off it (close enough to putt from). */
-const onGreen = (s) => Boolean(s?.ball) && greenReach(s.ball.x, s.ball.z, HOLE.green) < 1 + HOLE.green.fringe + 0.35
+/** The course's hole being played. */
+const hole = () => HOLES[Math.min(state.hole, HOLES.length - 1)]
+const onGreen = (s) => Boolean(s?.ball) && greenReach(s.ball.x, s.ball.z, hole().green) < 1 + hole().green.fringe + 0.35
 /** Putting now: the putting modes, or the course with the ball on the green. */
 const isPutting = () => state.mode === 'putting' || state.mode === 'putts' || (isCourse() && onGreen(seat()))
 const isPutts = () => state.mode === 'putts'
 /** The green this seat putts on: the course's, or the practice green. */
-const greenOf = () => (isCourse() ? HOLE.green : GREEN)
+const greenOf = () => (isCourse() ? hole().green : GREEN)
 const PT = TUNING.putting
 /** A seat's putt for the view: from, cup, the aimed direction (radians) and the green. */
 const puttOf = (s) => (s?.ball && s.cup ? { from: s.ball, cup: s.cup, dir: ((bearing(s.ball, s.cup) + (s.paim ?? 0)) * Math.PI) / 180, green: greenOf() } : null)
 /** The course: the line from the ball to the pin (degrees from downrange). */
-const lineDeg = (s) => bearing(s.ball, s.cup)
-/** The course: every seat on the tee, nothing played. */
+const lineDeg = (s) => lineFrom(s.ball, s)
+/**
+ * The line a shot from this spot starts on: to the pin, except from the tee of a hole that bends,
+ * where it's down the fairway.
+ */
+const lineFrom = (spot, s) => bearing(spot, targetFrom(spot, s))
+/** What a shot from this spot is played toward: the pin, or from the tee of a hole that bends, its landing spot. */
+const targetFrom = (spot, s) => (isCourse() && hole().via && Math.hypot(spot.x - hole().tee.x, spot.z - hole().tee.z) < 1 ? hole().via : s.cup)
+/** In sand (a bunker or a beach): every club but the sand wedge loses a third of its distance. */
+const inSand = (s) => isCourse() && Boolean(s?.ball) && ['sand', 'bunker'].includes(lieAt(s.ball.x, s.ball.z))
+const sandCarry = (s, club) => (inSand(s) && club.id !== 'sw' ? TUNING.ball.sandCarry : 1)
+/** The course: a seat on the tee of the hole being played, nothing played. */
 function toTee(s) {
-  s.ball = { ...HOLE.tee }
-  s.cup = { ...HOLE.cup }
+  s.ball = { ...hole().tee }
+  s.cup = { ...hole().cup }
   s.strokes = 0
   s.done = false
 }
@@ -351,8 +395,15 @@ party.on('join', (p) => {
   if ((state.screen === 'playing' || state.screen === 'paused') && state.seats[0]?.kind !== 'tv' && !state.seats.some((s) => s.id === p.id)) {
     const s = newSeat(p, state.seats.length)
     if (isPutts()) toHole(s) // a latecomer starts on the hole being played
-    if (isCourse()) toTee(s)
+    if (isCourse()) {
+      // A latecomer takes a double bogey on each hole already played, and can't set a best.
+      for (let i = 0; i < state.hole; i++) s.card[i] = HOLES[i].par + 2
+      s.late = state.hole > 0
+      toTee(s)
+    }
     state.seats.push(s)
+    if (state.phase === 'lineup' && !state.safe.has(p.id)) state.tipsGame = true
+    publish()
   }
 })
 party.on('end', () => {
@@ -363,9 +414,12 @@ party.on('msg', ({ from, data }) => {
   if (data.pause && state.screen === 'playing') return pause()
   if (data.resume && state.screen === 'paused') return resume()
   if (data.again && state.screen === 'gameover') return newGame()
-  if (data.safe) {
-    if (!state.safe.has(from)) sfx.blip()
+  // I'm ready, from the Line-up (it also means the safety tips were read; { safe } is the older phone page's).
+  if (data.ready || data.safe) {
+    const inLineup = state.screen === 'playing' && state.phase === 'lineup' && state.seats.some((x) => x.id === from)
+    if (!state.safe.has(from) || (inLineup && !state.ready.has(from))) sfx.blip()
     state.safe.add(from)
+    if (inLineup) state.ready.add(from)
     return publish()
   }
   // The Wardrobe: any seated phone, any time.
@@ -380,11 +434,17 @@ party.on('msg', ({ from, data }) => {
     if (mine) pickHand(mine, data.hand)
     return
   }
+  // Easy, Normal or Pro, from the phone's Wardrobe: any seated phone, any time.
+  if (typeof data.level === 'string' && LEVELS.includes(data.level)) {
+    const mine = state.seats.find((x) => x.id === from)
+    if (mine) pickLevel(mine, data.level)
+    return
+  }
   const s = seat()
   if (state.screen !== 'playing' || !s || s.id !== from || state.phase !== 'aim') return
   if (typeof data.club === 'number' && !isPutting()) setClub(s, data.club)
   if (data.shot && typeof data.shot === 'object') {
-    const sw = readPhoneSwing(data.shot, { strength: settings.data.strength })
+    const sw = readPhoneSwing(data.shot, { strength: lvl(s).strength })
     // Which way you swing is your pick (right-handed until you pick), never the phone's guess
     // from how it was held: that guess wobbles, and the bean would flip sides between swings.
     take({ ...sw, hand: s.hand, how: 'phone', raw: data.shot })
@@ -397,6 +457,7 @@ function newGame() {
   for (const s of state.seats) {
     s.shots = []
     s.card = []
+    s.late = false
     s.ball = s.cup = null
   }
   state.hole = 0
@@ -405,22 +466,32 @@ function newGame() {
   state.turn = 0
   state.recent = []
   view.clearMarks()
-  state.banner = null
+  state.banner = isCourse() ? holeBanner() : null
   state.screen = 'playing'
   party.public.paused = false
   sfx.music(true)
-  // Before the first swing of a party: the safety screen, until every phone has read it.
-  if (unsafe().length) {
-    state.phase = 'safety'
-    state.safetyTime = 0
-    if (isPutting()) setupPutt(seat())
-    snapCamera(seat())
-    return publish()
-  }
-  startTurn()
+  // Every game starts with the Line-up: everyone picks their level (and outfit), sees the others',
+  // and says I'm ready. The first game of a party also shows the safety tips.
+  state.phase = 'lineup'
+  state.ready = new Set()
+  state.lineupTime = 0
+  state.tipsGame = unread().length > 0
+  if (isPutting()) setupPutt(seat())
+  snapCamera(seat())
+  publish()
 }
-/** Seated, connected phones that haven't tapped "I'm ready" on the safety card. */
-const unsafe = () => state.seats.filter((x) => x.kind === 'phone' && connected(x) && !state.safe.has(x.id))
+/** Seated, connected phones that haven't read the safety tips this party. */
+const unread = () => state.seats.filter((x) => x.kind === 'phone' && connected(x) && !state.safe.has(x.id))
+/** Seats the Line-up waits for: every connected phone and local pad that hasn't said I'm ready. */
+const needsReady = (x) => (x.kind === 'phone' || x.kind === 'local') && connected(x)
+const notReady = () => state.seats.filter((x) => needsReady(x) && !state.ready.has(x.id))
+/** One step easier (-1) or harder (+1), for controllers in the Line-up. */
+function stepLevel(s, d) {
+  const i = clamp(LEVELS.indexOf(s.level) + d, 0, LEVELS.length - 1)
+  if (LEVELS[i] !== s.level) pickLevel(s, LEVELS[i])
+}
+/** The course: what a hole is, as it starts. */
+const holeBanner = () => ({ text: `Hole ${state.hole + 1}`, sub: `${hole().name} · par ${hole().par} · ${holeYards(hole())} yd`, color: GOLD, t: 0 })
 function soloGame() {
   state.seats = [newSeat({ id: 'tv', name: CREW[0].name, kind: 'tv' }, 0)]
   newGame()
@@ -428,6 +499,11 @@ function soloGame() {
 
 function startTurn() {
   const s = seat()
+  state.aimFor = 0
+  if (s) {
+    const kind = hintKind(s)
+    hintTurns.set(kind, (hintTurns.get(kind) ?? 0) + 1)
+  }
   state.phase = 'aim'
   state.meter = null
   state.flick = null
@@ -438,14 +514,17 @@ function startTurn() {
   else if (isCourse() && s) {
     // A full shot on the course: aimed at the pin, with the club that gets there.
     s.aim = 0
-    s.club = clubFor(yardsToPin(s.ball), CLUBS)
+    // From sand the clubs go two-thirds as far, so it takes more club (or the wedge, if it reaches).
+    const yd = yardsToPin(s.ball, targetFrom(s.ball, s))
+    const wedge = CLUBS.findIndex((c) => c.id === 'sw')
+    s.club = inSand(s) ? (CLUBS[wedge].carry >= yd - 5 ? wedge : clubFor(yd / TUNING.ball.sandCarry, CLUBS)) : clubFor(yd, CLUBS)
   }
   snapCamera(s)
   publish()
 }
 /**
  * Putting: where this seat's putt is from (practice: a fresh one every turn, short, middling,
- * long), and the help's read of it. With Straight shot help on (the default), the aim starts on
+ * long), and the help's read of it. With the read on (Easy and Normal, the default), the aim starts on
  * the line that allows for the break, a guide shows the roll, and the bars mark the pace.
  */
 function setupPutt(s) {
@@ -458,10 +537,11 @@ function setupPutt(s) {
     s.ball = spot.start
     s.cup = spot.cup
   }
-  s.plan = planPutt(s.ball, s.cup, PT, greenOf())
-  s.paim = puttHelp() ? s.plan.aim : 0
+  s.plan = planPutt(s.ball, s.cup, lvl(s).P, greenOf())
+  s.paim = puttHelp(s) ? s.plan.aim : 0
 }
-const puttHelp = () => settings.data.assist !== 'off'
+/** Does the game read this seat's putts (Easy and Normal; Pro reads the green alone)? */
+const puttHelp = (s = seat()) => lvl(s).read
 /**
  * How far (m, on the flat) a full putting bar rolls for this seat's putt: twice the putt, so the
  * middle of the bar is the cup. With the help, the help's pace (the slope allowed for); without
@@ -469,8 +549,11 @@ const puttHelp = () => settings.data.assist !== 'off'
  */
 function puttRange(s) {
   if (!s?.ball || !s.cup) return PT.full * FT
-  const flat = puttHelp() && s.plan ? s.plan.speed ** 2 / (2 * PT.roll) : Math.hypot(s.cup.x - s.ball.x, s.cup.z - s.ball.z) + PT.planPast
-  return clamp(flat * PT.range, PT.rangeMin, PT.rangeMax)
+  return clamp(puttFlat(s) * PT.range, PT.rangeMin, PT.rangeMax)
+}
+/** The putt's length on the flat (m): at the help's pace when the help is on, else the distance and a little past. */
+function puttFlat(s) {
+  return puttHelp(s) && s.plan ? s.plan.speed ** 2 / (2 * PT.roll) : Math.hypot(s.cup.x - s.ball.x, s.cup.z - s.ball.z) + PT.planPast
 }
 function snapCamera(s) {
   if (isPutting() && s?.ball) view.snapPutt(puttOf(s))
@@ -484,9 +567,18 @@ function nextTurn() {
   if (isPutts()) return nextPutter()
   if (isCourse()) {
     // Whoever is farthest from the pin plays next; everyone on the tee goes in seat order.
-    const i = nextToPlay(state.seats, state.turn, HOLE.cup, connected)
-    if (i < 0) return gameOver()
-    state.turn = i
+    const i = nextToPlay(state.seats, state.turn, hole().cup, connected)
+    if (i >= 0) {
+      state.turn = i
+      return startTurn()
+    }
+    // Everyone has holed out: the next tee, or the scorecard after the last hole.
+    if (state.hole + 1 >= HOLES.length) return gameOver()
+    state.hole++
+    state.seats.forEach(toTee)
+    state.turn = Math.max(0, state.seats.findIndex(connected))
+    view.clearMarks()
+    state.banner = holeBanner()
     return startTurn()
   }
   if (isTargets()) {
@@ -536,9 +628,9 @@ function gameOver() {
   for (const s of state.seats) s.newBest = false
   if (isCourse()) {
     for (const s of state.seats) {
-      if (!s.done) continue
-      if (s.strokes < (save.data.courseBest[s.name] ?? Infinity)) {
-        save.data.courseBest[s.name] = s.strokes
+      if (s.late || s.card.filter((x) => x).length < HOLES.length) continue // only a full round counts
+      if (roundTotal(s) < (save.data.roundBest[s.name] ?? Infinity)) {
+        save.data.roundBest[s.name] = roundTotal(s)
         s.newBest = true
       }
     }
@@ -577,11 +669,11 @@ function take(sw) {
   const s = seat()
   const club = CLUBS[s.club]
   const flip = settings.data.flipFace ? -1 : 1
-  const clean = settle({ power: sw.power, face: sw.face * flip, path: sw.path * flip }, { assist: settings.data.assist })
+  const clean = settle({ power: sw.power, face: sw.face * flip, path: sw.path * flip }, { assist: lvl(s).assist })
   const hand = sw.hand ?? s.hand ?? settings.data.hand
   // On the course, from wherever it lies, aimed off the line to the pin (and it can go in).
   const from = isCourse() ? { ...s.ball } : null
-  const result = isCourse() ? strike(clean, club, lineDeg(s) + s.aim, hand, TUNING.ball, { from, cup: s.cup }) : strike(clean, club, s.aim, hand)
+  const result = isCourse() ? strike({ ...clean, power: clean.power * sandCarry(s, club) }, club, lineDeg(s) + s.aim, hand, TUNING.ball, { from, cup: s.cup }) : strike(clean, club, s.aim, hand)
   state.shot = { result, t: 0, landed: false, seat: s, input: { ...sw, ...clean }, club, from }
   state.phase = 'flight'
   state.follow = 0.5
@@ -596,14 +688,15 @@ function take(sw) {
 function takePutt(sw) {
   const s = seat()
   const flip = settings.data.flipFace ? -1 : 1
-  const clean = settlePutt({ face: sw.face * flip, path: sw.path * flip }, { assist: settings.data.assist })
-  const strength = settings.data.strength
+  const L = lvl(s)
+  const clean = settlePutt({ face: sw.face * flip, path: sw.path * flip }, { assist: L.assist })
+  const strength = L.strength
   const range = puttRange(s)
   const speed = puttSpeed({ how: sw.how, speed: sw.raw?.speed, back: sw.raw?.back, power: sw.power }, { strength, range })
   // A through-stroke too gentle for the backstroke: the putt is softer than the bar promised.
   if (sw.how === 'phone' && sw.raw) sw = { ...sw, lazy: strokePower(sw.raw, puttStroke(strength, { range })).lazy }
   const dir = bearing(s.ball, s.cup) + s.paim + startLine(clean)
-  const roll = rollPutt(s.ball, dir, speed, s.cup, PT, greenOf())
+  const roll = rollPutt(s.ball, dir, speed, s.cup, L.P, greenOf())
   state.shot = { putt: true, roll, t: 0, landed: false, seat: s, from: { ...s.ball }, cup: { ...s.cup }, dir, speed, input: { ...sw, ...clean } }
   state.phase = 'flight'
   state.follow = 0.5
@@ -642,7 +735,7 @@ function aimControls(dt) {
     if (pressed('down') || pressed('rb') || (p.pressed && inside(p, TOUCH.clubR))) setClub(s, s.club + 1)
   }
   // The three-press meter: A starts the backswing, A sets the power, A on the line strikes.
-  const M = TUNING.meter
+  const M = lvl(s).meter
   if (state.phase === 'aim' && pressed('a')) {
     state.phase = 'meter'
     state.meter = { stage: 'power', v: 0, power: 0 }
@@ -748,7 +841,7 @@ function flightUpdate(dt) {
         view.burst(fl.carry, [TUNING.targets.greens[sc.green].color, GOLD, '#ffffff', TEAL], sc.ring === 0 ? 120 : 60)
         view.bump(sc.ring === 0 ? 0.8 : 0.4)
         buzz(sh.seat, sc.ring === 0 ? 220 : 100)
-        state.banner = { text: `+${sc.points}`, sub: sc.name, color: GOLD, t: 0 }
+        state.banner = { text: `+${sc.points}`, sub: sc.name, color: GOLD, t: 0, points: sc.points }
       } else {
         sfx.miss()
         view.react(sh.seat.look, 'sad')
@@ -797,7 +890,7 @@ function finishPutt() {
     if (r.holed) {
       s.done = true
       sub = s.strokes === 1 ? 'One putt!' : `${s.strokes} putts`
-    } else if (how.left <= PT.gimme) {
+    } else if (lvl(s).gimme && how.left <= lvl(s).gimme) {
       // Close enough: it's given, one more putt.
       s.strokes++
       s.done = true
@@ -817,13 +910,13 @@ function finishPutt() {
     let text = r.lipped ? 'Lip out!' : how.left < 1.5 ? 'So close!' : ''
     if (r.holed) {
       s.done = true
-      text = scoreName(s.strokes)
+      text = scoreName(s.strokes, hole().par)
       sub = `${s.strokes} strokes`
-    } else if (how.left <= PT.gimme) {
+    } else if (lvl(s).gimme && how.left <= lvl(s).gimme) {
       // Close enough: it's given, one more stroke.
       s.strokes++
       s.done = true
-      text = `Gimme · ${scoreName(s.strokes)}`
+      text = `Gimme · ${scoreName(s.strokes, hole().par)}`
       sub = `${s.strokes} strokes`
     } else s.ball = { x: r.rest.x, z: r.rest.z }
     if (!s.done && s.strokes >= MAX_STROKES) {
@@ -831,6 +924,7 @@ function finishPutt() {
       text = 'Picked up'
       sub = `${s.strokes} on this hole`
     }
+    if (s.done) s.card[state.hole] = s.strokes
     state.banner = text ? { text, sub, color: s.done && text !== 'Picked up' ? GOLD : text === 'Picked up' ? QUIET : INK, t: 0 } : null
   } else {
     s.shots.push({ holed: r.holed, feet: Math.round(feet), left: Math.round(how.left * 10) / 10, putt: true })
@@ -871,7 +965,8 @@ function finishShot() {
       if (longest) state.banner = { text: 'New longest drive!', sub: `${r.total} yd`, color: GOLD, t: 0 }
       sfx.long()
     }
-    state.banner ??= { text: r.shape, sub: `${r.carry} yd carry`, color: r.shape === 'Straight!' ? LIME : INK, t: 0 }
+    const offChip = Math.abs(r.offline) < 1 ? 'on line' : `${Math.abs(r.offline)} yd ${r.offline > 0 ? 'right' : 'left'}`
+    state.banner ??= { text: r.shape, chips: [{ text: `${r.carry} yd`, gold: true }, { text: offChip }], color: r.shape === 'Straight!' ? LIME : INK, t: 0 }
     const good = r.shape === 'Straight!' && sh.input.power > 0.75
     // A big hook or slice makes them wince; the sea makes them sad (below).
     if (!r.flight.water) cheer(s, good ? 'cheer' : Math.abs(r.offline) < 12 ? 'happy' : Math.abs(r.offline) < 30 ? 'wince' : 'sad')
@@ -882,14 +977,19 @@ function finishShot() {
   }
   save.save()
   const off = r.flight.water ? 'in the sea' : Math.abs(r.offline) < 1 ? 'on line' : `${Math.abs(r.offline)} yd ${r.offline > 0 ? 'right' : 'left'}`
-  if (s.kind === 'phone') party.view(s.id).last = `${r.carry} yd carry · ${r.shape} · ${off}${sh.input.lazy ? ' · swing through faster for the full bar' : ''}`
+  // The phone gets the numbers in full (the TV keeps to the moment): practice is about the details.
+  const i = sh.input
+  const detail = state.mode === 'practice' && i.how === 'phone'
+    ? ` · ${r.total} yd total · ${Math.round(i.power * 100)}%${i.mph ? ` · ${i.mph} mph` : ''} · face ${Math.abs(i.face) < 0.5 ? 'square' : `${Math.round(Math.abs(i.face))}° ${i.face > 0 ? 'open' : 'closed'}`} · path ${Math.abs(i.path) < 0.5 ? 'straight' : `${Math.round(Math.abs(i.path))}° ${i.path > 0 ? 'out' : 'in'}`}${i.raw ? ` · tempo ${i.raw.tempo}:1` : ''}`
+    : ''
+  if (s.kind === 'phone') party.view(s.id).last = `${r.carry} yd carry · ${r.shape} · ${off}${detail}${i.lazy ? ' · swing through faster for the full bar' : ''}`
   state.phase = 'result'
   state.resultTime = 0
   publish()
 }
 
 /** How the course's lies read on the TV. */
-const LIES = { green: 'On the green!', fringe: 'Just off the green', fairway: 'Fairway', rough: 'In the rough', hill: 'Up on the hill', sand: 'On the beach' }
+const LIES = { green: 'On the green!', fringe: 'Just off the green', fairway: 'Fairway', rough: 'In the rough', hill: 'Up on the hill', sand: 'On the beach', bunker: 'In the bunker!', wrong: 'Wrong green!' }
 
 /**
  * A full shot on the course has stopped: count it, move the ball to where it lies (the sea is a
@@ -902,14 +1002,14 @@ function finishCourseShot() {
   const f = r.flight
   s.strokes++
   let banner
-  if (f.water) {
+  if (f.water || lieAt(f.rest.x, f.rest.z) === 'water') {
     s.strokes++
     banner = { text: 'Splash!', sub: '+1 stroke · play it again from there', color: '#7fd6ff' }
     view.react(s.look, 'sad')
   } else if (f.holed) {
     s.ball = { ...s.cup }
     s.done = true
-    banner = { text: scoreName(s.strokes), sub: `In from ${r.total} yd!`, color: GOLD }
+    banner = { text: scoreName(s.strokes, hole().par), sub: `In from ${r.total} yd!`, color: GOLD }
     sfx.cup()
     cheer(s, 'cheer')
     view.burst({ ...s.cup, y: groundHeight(s.cup.x, s.cup.z) }, [s.color, GOLD, '#ffffff', TEAL], 120)
@@ -918,15 +1018,18 @@ function finishCourseShot() {
     // No marker where it stopped (the range's coloured pins): the next shot is played from right
     // there, and the camera would be inside it.
     s.ball = { x: f.rest.x, z: f.rest.z }
-    const lie = lieAt(s.ball.x, s.ball.z)
-    const yd = Math.round(yardsToPin(s.ball))
-    banner = { text: LIES[lie] ?? r.shape, sub: lie === 'green' ? `${Math.round(yardsToPin(s.ball) * 3)} ft to the pin` : `${yd} yd to the pin`, color: lie === 'green' ? LIME : INK }
+    // Another hole's green is only somewhere to play from.
+    const found = lieAt(s.ball.x, s.ball.z)
+    const lie = (found === 'green' || found === 'fringe') && !onGreen(s) ? 'wrong' : found
+    const yd = Math.round(yardsToPin(s.ball, s.cup))
+    banner = { text: LIES[lie] ?? r.shape, sub: lie === 'green' ? `${Math.round(yardsToPin(s.ball, s.cup) * 3)} ft to the pin` : `${yd} yd to the pin`, color: lie === 'green' ? LIME : INK }
     cheer(s, lie === 'green' ? 'cheer' : lie === 'fairway' || lie === 'fringe' ? 'happy' : 'wince')
   }
   if (!s.done && s.strokes >= MAX_STROKES) {
     s.done = true
     banner = { text: 'Picked up', sub: `${s.strokes} on this hole`, color: QUIET }
   }
+  if (s.done) s.card[state.hole] = s.strokes
   state.banner = { ...banner, t: 0 }
   save.save()
   if (s.kind === 'phone') party.view(s.id).last = `${r.carry} yd carry · ${r.shape} · ${banner.text}${banner.sub ? ` · ${banner.sub}` : ''}${sh.input.lazy ? ' · swing through faster for the full bar' : ''}`
@@ -945,6 +1048,12 @@ function openLobby() {
 }
 function pause() {
   state.resumeTo = state.screen === 'lobby' ? 'lobby' : 'playing'
+  // Difficulty for whoever is up; not in the lobby, where nobody is seated yet.
+  const s = state.resumeTo === 'playing' ? seat() : null
+  const at = pauseMenu.items.indexOf(PAUSE_LEVEL)
+  if (!s && at >= 0) pauseMenu.items.splice(at, 1)
+  if (s && at < 0) pauseMenu.items.splice(1, 0, PAUSE_LEVEL)
+  if (s) Object.assign(PAUSE_LEVEL, { label: `${s.name.length > 8 ? s.name.slice(0, 7) + '…' : s.name}'s level`, value: s.level })
   pauseMenu.select('resume')
   state.screen = 'paused'
   party.public.paused = true
@@ -1058,8 +1167,9 @@ function playUpdate(dt) {
   if (input.pressed('menu')) return pause()
   const s = seat()
   if (!s) return quitToTitle()
-  if (state.phase === 'safety') return safetyUpdate(dt)
+  if (state.phase === 'lineup') return lineupUpdate(dt)
   if (state.banner) state.banner.t += dt
+  if (state.phase === 'aim' || state.phase === 'meter') state.aimFor = (state.aimFor ?? 0) + dt
   // The golfer: follows the phone's swing live, or plays the follow-through after a hit.
   const live = s.kind === 'phone' ? party.inputs[s.id] ?? {} : {}
   // A putting stroke is small: shown bigger so the TV can see it rock.
@@ -1081,14 +1191,29 @@ function playUpdate(dt) {
 }
 
 /**
- * The safety screen: it waits for every phone's "I'm ready", or for A / Start now on this
- * machine (or a local pad) once it has been up long enough to be read.
+ * The Line-up: it waits for every phone's (and local pad's) I'm ready, or for A / Start now on
+ * this machine: at once, unless the safety tips are up and haven't been up long enough to read.
+ * A local pad's ◀ ▶ changes its own level and its A says it's ready; playing on this screen,
+ * ◀ ▶ changes yours and A starts.
  */
-function safetyUpdate(dt) {
-  state.safetyTime += dt
-  const early = state.safetyTime > TUNING.safetyMin
-  const ok = input.pressed('a') || state.seats.some((x) => x.kind === 'local' && party.pressed(x.id, 'a')) || (input.pointer.pressed && inside(input.pointer, SAFETY_OK))
-  if (!unsafe().length || (early && ok)) {
+function lineupUpdate(dt) {
+  state.lineupTime += dt
+  const solo = state.seats[0]?.kind === 'tv'
+  for (const x of state.seats) {
+    if (x.kind === 'local') {
+      const d = (party.pressed(x.id, 'right') ? 1 : 0) - (party.pressed(x.id, 'left') ? 1 : 0)
+      if (d) stepLevel(x, d)
+      if (party.pressed(x.id, 'a') && !state.ready.has(x.id)) {
+        state.ready.add(x.id)
+        sfx.blip()
+        publish()
+      }
+    } else if (x.kind === 'tv' && input.navX) stepLevel(x, input.navX)
+  }
+  const early = solo || !state.tipsGame || state.lineupTime > TUNING.safetyMin
+  const ok = input.pressed('a') || (input.pointer.pressed && inside(input.pointer, SAFETY_OK))
+  const allReady = !solo && state.seats.some(needsReady) && !notReady().length
+  if (allReady || (early && ok)) {
     sfx.blip()
     startTurn()
   }
@@ -1103,7 +1228,7 @@ function publish() {
   party.public.putting = isPutting()
   party.public.turn = s?.id ?? null
   party.public.turnName = s?.name ?? ''
-  const strength = settings.data.strength
+  const strength = lvl(s).strength
   const SW = TUNING.swing
   party.public.clubs = isPutting() ? [{ short: 'PT', sub: 'putter' }] : CLUBS.map((c) => ({ short: c.short, carry: c.carry }))
   // The phone's swing reader (a full swing, or a putting stroke: small and slow), and what its bar
@@ -1114,6 +1239,9 @@ function publish() {
     party.public.swing = { ...PT.reader, ...bar, commit: st.commit, backFull: Math.round(st.backFull * 10) / 10, full: Math.round(st.full) }
   } else party.public.swing = { ...SW.reader, ...bar, backFull: SW.backFull[strength] ?? SW.backFull.normal, full: SW.full[strength] ?? SW.full.normal }
   party.public.wardrobe = OUTFITS
+  party.public.levels = LEVELS.map((id) => ({ id, label: levelOf(id).label, sub: levelOf(id).sub, icon: levelOf(id).icon }))
+  // The Line-up: everyone's pick, so each phone can see what the others chose.
+  party.public.lineup = playing && state.phase === 'lineup' ? state.seats.map((x) => ({ name: x.name, color: x.color, level: x.level, ready: !needsReady(x) || state.ready.has(x.id) })) : null
   party.public.cards = state.seats.map((x) => ({ id: x.id, name: x.name, color: x.color, score: scoreText(x) }))
   party.public.banner = state.banner?.text ?? null
   // Whatever menu the TV shows, every phone shows too, so nobody has to touch the TV.
@@ -1122,7 +1250,7 @@ function publish() {
   else if (state.screen === 'gameover') phoneMenus.publish(overMenu, isCourse() ? 'Round over' : 'Challenge over')
   else if (state.screen === 'pick') phoneMenus.publish(pickMenu, 'What are we playing?')
   else phoneMenus.publish(null)
-  party.public.ballsLeft = isTargets() && s ? `${s.name}: ball ${Math.min(TUNING.targets.balls, s.shots.length + 1)} of ${TUNING.targets.balls}` : isPutts() && s ? `Hole ${state.hole + 1} of ${PT.holes} · ${s.name} is away` : isCourse() && s?.ball ? `${HOLE.name} · par ${HOLE.par} · ${s.name} is away, ${Math.round(yardsToPin(s.ball))} yd out` : ''
+  party.public.ballsLeft = isTargets() && s ? `${s.name}: ball ${Math.min(TUNING.targets.balls, s.shots.length + 1)} of ${TUNING.targets.balls}` : isPutts() && s ? `Hole ${state.hole + 1} of ${PT.holes} · ${s.name} is away` : isCourse() && s?.ball ? `Hole ${state.hole + 1} of ${HOLES.length} · ${hole().name} · par ${hole().par} · ${s.name} is away, ${Math.round(yardsToPin(s.ball, s.cup))} yd out` : ''
   // Every phone gets its own view, seated or not (a phone that joins mid-game sees it at once).
   for (const p of party.players) {
     if (p.kind !== 'phone') continue
@@ -1135,20 +1263,23 @@ function publish() {
     v.putt = isPutting() && mine?.ball && mine.cup ? puttRead(mine) : null
     // The help's pace, as a mark on the phone's bar (the bar is the backstroke: ball speed ÷ a full one's).
     // The bar is scaled to the putt (puttRange): the help's pace is its middle, near enough.
-    v.puttMark = isPutting() && puttHelp() && mine?.plan ? Math.round((mine.plan.speed ** 2 / (2 * PT.roll) / puttRange(mine)) * 100) / 100 : null
+    v.puttMark = isPutting() && puttHelp(mine) && mine?.plan ? Math.round((mine.plan.speed ** 2 / (2 * PT.roll) / puttRange(mine)) * 100) / 100 : null
     // How far a full bar rolls (ft), so the phone can say how far this stroke will go as you take it back.
     v.puttRange = isPutting() && mine?.ball && mine.cup ? Math.round((puttRange(mine) / FT) * 10) / 10 : null
     v.golfer = mine ? { name: mine.crew.name, color: mine.crew.color } : null
     v.outfit = mine ? mine.look.outfit : null
     v.hand = mine ? mine.hand : null
+    v.level = mine ? mine.level : null
     v.safe = state.safe.has(p.id)
+    v.ready = state.phase === 'lineup' && state.ready.has(p.id)
+    v.tips = state.phase === 'lineup' && state.tipsGame
   }
 }
 const total = (s) => s.shots.reduce((a, x) => a + (x.points ?? 0), 0)
 const putts = (s) => s.card.reduce((a, x) => a + (x ?? 0), 0)
 function scoreText(s) {
   if (isPutts()) return `${putts(s) + (s.done ? 0 : s.strokes)}`
-  if (isCourse()) return s.done ? `${s.strokes} ✓` : `${s.strokes}`
+  if (isCourse()) return s.done ? `${roundTotal(s)} ✓` : `${roundTotal(s)}`
   if (state.mode === 'putting') return s.shots.length ? `${s.shots.filter((x) => x.holed).length}/${s.shots.length}` : '–'
   if (isTargets()) return `${total(s)}`
   return s.shots.length ? `${Math.max(...s.shots.map((x) => x.total))} yd` : '–'
@@ -1167,6 +1298,7 @@ function draw(dt) {
   const s = seat()
   const inGame = state.screen === 'playing' || state.screen === 'paused' || state.screen === 'gameover' || (state.screen === 'settings' && state.from === 'paused')
   const sh = state.shot
+  const lineup = inGame && state.phase === 'lineup' && state.screen !== 'gameover'
   const P = inGame && isPutting() ? puttOf(s) : null
   let mode = state.screen === 'title' || state.screen === 'wardrobe' || state.screen === 'pick' || state.screen === 'lobby' || (state.screen === 'settings' && state.from === 'title') ? 'title' : 'overview'
   if (inGame && s && P) mode = state.phase === 'flight' ? 'roll' : state.phase === 'result' ? 'rolled' : 'putt'
@@ -1174,7 +1306,7 @@ function draw(dt) {
   const pts = sh ? (sh.putt ? sh.roll.points : sh.result.flight.points) : []
   // On the green, the ball waits at the seat's spot; a putt rolls from where it was struck.
   if (P && sh?.putt) Object.assign(P, { from: sh.from, cup: sh.cup, dir: (sh.dir * Math.PI) / 180 })
-  if (P && puttHelp() && s?.plan && !sh && (state.phase === 'aim' || state.phase === 'meter')) P.path = guide(s)
+  if (P && puttHelp(s) && s?.plan && !sh && (state.phase === 'aim' || state.phase === 'meter')) P.path = guide(s)
   if (P) P.balls = state.seats.filter((o) => o !== s && (isPutts() || isCourse()) && o.ball && !o.done && connected(o) && greenReach(o.ball.x, o.ball.z, P.green) < 1.4).map((o) => ({ ...o.ball, color: o.color }))
   // The course: a full shot is played from where the ball lies (teed up on the tee).
   const course = inGame && isCourse() && s?.ball && !P
@@ -1184,16 +1316,18 @@ function draw(dt) {
   view.draw({
     mode,
     putting: P,
-    aim: course ? bearing(spot, s.cup) + s.aim : (s?.aim ?? 0),
-    tee: course ? { x: spot.x, z: spot.z, dir: (bearing(spot, s.cup) * Math.PI) / 180 } : null,
-    flag: inGame && isCourse() ? { cup: HOLE.cup, green: HOLE.green } : null,
+    aim: course ? lineFrom(spot, s) + s.aim : (s?.aim ?? 0),
+    tee: course ? { x: spot.x, z: spot.z, dir: (lineFrom(spot, s) * Math.PI) / 180 } : null,
+    flag: inGame && isCourse() ? { cup: hole().cup, green: hole().green } : null,
     ball: sh?.pos ?? ballAtRest,
     trail: sh ? pts.slice(0, sh.trailN ?? 0).concat(sh.pos ? [{ ...sh.pos }] : []) : [],
     trailColor: s?.color,
     golfer: inGame && s ? s.look : null,
+    club: s ? CLUBS[s.club]?.id : null,
     face: inGame && s ? faceOf(s) : 'smug',
     // The title: the crew lined up beside the rail, smiling at the camera.
-    waiting: inGame ? state.seats.filter((o) => o !== s && connected(o)).map((o) => o.look) : TITLE_CREW.map((l, i) => ({ ...l, face: TITLE_FACES[i] })),
+    // In the Line-up everyone's bean is out (the first up at the tee), smiling once they're ready.
+    waiting: lineup ? state.seats.filter((o) => o !== s).map((o) => ({ ...o.look, face: state.ready.has(o.id) ? 'joy' : 'idle' })) : inGame ? state.seats.filter((o) => o !== s && connected(o)).map((o) => o.look) : TITLE_CREW.map((l, i) => ({ ...l, face: TITLE_FACES[i] })),
     ground: sh?.pos ? (sh.putt ? puttHeight(sh.pos.x, sh.pos.z, greenOf()) : groundHeight(sh.pos.x, sh.pos.z)) : 0,
     land: sh?.landed && !sh.putt ? sh.result.flight.carry : null,
     swing: inGame ? state.swingPose : 0,
@@ -1208,6 +1342,9 @@ function draw(dt) {
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   canvas.style.cursor = state.screen === 'playing' && input.mode === 'mouse' && state.phase === 'flight' ? 'none' : ''
+  // Paused: the course goes soft and dim behind the rail.
+  const soft = state.screen === 'paused' ? 'blur(4px) brightness(0.62) saturate(0.85)' : ''
+  if (glCanvas.style.filter !== soft) glCanvas.style.filter = soft
 
   if (state.screen === 'title' || state.screen === 'wardrobe' || state.screen === 'pick') drawTitle()
   else if (state.screen === 'settings') {
@@ -1217,14 +1354,53 @@ function draw(dt) {
     lobby.draw(ctx, W, H)
   } else if (state.screen === 'gameover') drawResults()
   else {
-    drawHud(s)
-    if (state.screen === 'paused') {
-      veil(0.6)
-      text('Paused', W / 2, H / 2 - 250, head(64), INK)
-      pauseMenu.draw(ctx, fitFont(rubik, 28 * ts(), 380, ...pauseMenu.items.map((it) => it.label)))
-    }
+    if (state.screen === 'paused') drawPause(s)
+    else drawHud(s)
   }
   if (debug) drawDebug()
+}
+
+/**
+ * Paused: the clubhouse rail, as on the title (the course soft and dim behind it), with what's
+ * being played under the word, and a cream card with the scores so far.
+ */
+function drawPause(s) {
+  hud = {}
+  ctx.save()
+  ctx.fillStyle = 'rgba(11,26,54,0.95)'
+  ctx.beginPath()
+  ctx.roundRect(-RAIL.radius, 0, RAIL.w + RAIL.radius, H, RAIL.radius)
+  ctx.fill()
+  ctx.restore()
+  const rs = Math.min(ts(), 1.2)
+  text('Paused', 34, 92 + DY, lilita(70), GOLD, 'left')
+  const what = state.resumeTo === 'lobby' ? 'Waiting for players' : (MODES.find((m) => m.value === state.mode)?.title ?? '')
+  plain(what, 36, 150 + DY, fitFont((px) => rubik(px, 500), 19 * rs, RAIL.w - 70, what), QUIET, 'left')
+  railTiles(pauseMenu, rs)
+  hud.pauseRail = true
+  // The scores so far (once there are any to show).
+  const seats = state.resumeTo === 'lobby' ? [] : state.seats
+  if (!seats.length) return
+  const x = RAIL.w + 46
+  const w = W - x - 48
+  const cs = Math.min(ts(), 1.25)
+  const h = Math.round(118 * cs)
+  const y = H - 48 - h
+  panel(x, y + 8, w, h, 26, 'rgba(11,26,54,0.35)')
+  panel(x, y, w, h, 26, INK)
+  plain('The scores so far', x + 30, y + 36 * cs, lilita(30 * cs), '#0b1a36', 'left')
+  const col = (w - 60) / Math.min(4, seats.length)
+  seats.slice(0, 4).forEach((o, i) => {
+    const cx = x + 30 + i * col
+    const cy = y + h - 36 * cs
+    dot(cx + 14, cy, 15, '#e5d9c2')
+    dot(cx + 14, cy, 12, o.color)
+    const name = o.name.slice(0, 10)
+    const nf = fitFont(rubik, 20 * cs, col - 90, name)
+    plain(name, cx + 36, cy + 1, nf, '#0b1a36', 'left')
+    ctx.font = nf
+    plain(scoreText(o), cx + 44 + ctx.measureText(name).width, cy + 1, rubik(20 * cs), '#5b6b8c', 'left')
+  })
 }
 
 /** The help's guide: the roll at the current aim and the help's pace (cached until the aim moves). */
@@ -1234,7 +1410,7 @@ function guide(s) {
   const key = `${s.id}:${s.ball.x}:${s.ball.z}:${s.paim.toFixed(2)}`
   if (key !== guideKey) {
     guideKey = key
-    guidePts = previewPutt(s.ball, bearing(s.ball, s.cup) + s.paim, s.plan.speed, PT, greenOf())
+    guidePts = previewPutt(s.ball, bearing(s.ball, s.cup) + s.paim, s.plan.speed, lvl(s).P, greenOf())
   }
   return guidePts
 }
@@ -1244,7 +1420,7 @@ function guide(s) {
  * nervous over a short putt in the challenge, straining on the downswing.
  */
 function faceOf(s) {
-  if (state.phase === 'safety') return 'idle'
+  if (state.phase === 'lineup') return state.ready.has(s.id) ? 'joy' : 'idle'
   const live = s.kind === 'phone' ? party.inputs[s.id] ?? {} : {}
   if (state.phase === 'meter') return state.meter?.stage === 'accuracy' ? 'effort' : 'focus'
   if (state.phase === 'aim') {
@@ -1290,6 +1466,47 @@ function dot(x, y, r, color) {
   ctx.fill()
 }
 
+/** The rail's tiles for a menu (menu.js handles the input), and the prompts along its foot. */
+function railTiles(menu, rs, wardrobe = false) {
+  menu.items.forEach((it, i) => {
+    const r = menu.rect(i)
+    const on = it === menu.selected
+    ctx.save()
+    if (on) {
+      ctx.fillStyle = '#c99a12'
+      ctx.beginPath()
+      ctx.roundRect(r.x, r.y + 6, r.w, r.h, 20)
+      ctx.fill()
+    }
+    ctx.fillStyle = on ? GOLD : '#16305a'
+    ctx.beginPath()
+    ctx.roundRect(r.x, r.y, r.w, r.h, 20)
+    ctx.fill()
+    ctx.restore()
+    railIcon(it.id, r.x + 14, r.y + r.h / 2 - 21, on)
+    const ink = on ? '#0b1a36' : INK
+    const room = r.w - 70 - 16
+    if (it.type) {
+      // Room for the ‹ › arrows whether or not it's selected, so the text doesn't jump.
+      const value = menu.display(it)
+      ;(on ? plain : text)(it.label, r.x + 70, r.y + r.h * 0.34, fitFont(rubik, 19 * rs, room - 56, it.label), on ? '#0b1a36' : QUIET, 'left')
+      ;(on ? plain : text)(value, r.x + 70, r.y + r.h * 0.72, fitFont(rubik, 21 * rs, room - 56, value), ink, 'left')
+      if (on) plain('‹  ›', r.x + r.w - 18, r.y + r.h / 2 + 1, rubik(26), ink, 'right')
+    } else (on ? plain : text)(it.label, r.x + 70, r.y + r.h / 2 + 1, fitFont(rubik, 23 * rs, room, it.label), ink, 'left')
+  })
+  const prompt = (label, words, x, y) => {
+    ctx.font = rubik(17 * rs)
+    const w = ctx.measureText(label).width + 16
+    panel(x, y - 13 * rs, w, 26 * rs, 7, INK)
+    plain(label, x + w / 2, y + 1, rubik(17 * rs), '#0b1a36')
+    plain(words, x + w + 8, y + 1, rubik(17 * rs, 500), QUIET, 'left')
+    ctx.font = rubik(17 * rs, 500)
+    return x + w + 8 + ctx.measureText(words).width + 18
+  }
+  let px = wardrobe ? prompt('◀ ▶', 'change', 34, H - 40) : prompt(input.label('a'), 'choose', 34, H - 40)
+  prompt(input.dpadLabel(), 'move', px, H - 40)
+}
+
 /** The clubhouse rail's size: a navy column down the left, the crew in the scene to its right. */
 const RAIL = { w: 400, radius: 40 }
 /** What each title item does, in the card at the bottom right. */
@@ -1297,14 +1514,15 @@ const TITLE_CARD = {
   party: { title: 'Everyone grabs a phone', steps: [['Scan the code on the TV', TEAL], ['Dress your bean', PINK], ['Hold SET and swing', LIME]] },
   solo: { title: 'Just you, on this screen', text: 'Swing with the meter (A to start, A for power, A on the line), or pull down and flick with a mouse or touch.' },
   wardrobe: { title: 'Dress your bean', text: 'A hat, a top and one extra for playing on this screen. Phones have their own wardrobe.' },
-  settings: { title: 'Settings', text: 'Sound, text size, graphics, swing power, and how much help with straight shots and putts.' }
+  settings: { title: 'Settings', text: 'Sound, text size, graphics, swing power, and how much help with straight shots and putts.' },
+  [QUIT_TO_LIBRARY]: { title: 'Back to your games', text: 'Leave Big Swing Golf for the library. Your bests and outfits are saved.' }
 }
 const MODE_TEXT = {
   practice: 'Hit as many as you like and see every number: carry, curve, club speed, tempo.',
   targets: 'Ten balls each at five ringed greens. Further greens are worth more.',
   putting: 'A fresh putt every turn, short, middling and long. The help reads the break.',
   putts: 'Nine holes, fewest putts wins. Whoever is farthest from the cup putts next.',
-  course: `One hole by the sea: ${HOLE.name}, a par ${HOLE.par} of ${Math.round(yardsToPin(HOLE.tee))} yards. Everyone tees off, then whoever is farthest from the pin plays next. Fewest strokes wins.`
+  course: `${HOLES.length} holes by the sea, par ${COURSE.par}: ${HOLES.map((h) => h.name).join(', ')}. Everyone tees off, then whoever is farthest from the pin plays next. Fewest strokes wins.`
 }
 
 function drawTitle() {
@@ -1329,44 +1547,7 @@ function drawTitle() {
     text('Golf', 34, 160 + DY, lilita(74), LIME, 'left')
   }
   if (wardrobe) text('Wardrobe', RAIL.w - 34, 160 + DY, rubik(22 * rs), QUIET, 'right')
-  // The tiles: menu.js handles the input; this draws them as the rail's tiles.
-  menu.items.forEach((it, i) => {
-    const r = menu.rect(i)
-    const on = it === menu.selected
-    ctx.save()
-    if (on) {
-      ctx.fillStyle = '#c99a12'
-      ctx.beginPath()
-      ctx.roundRect(r.x, r.y + 6, r.w, r.h, 20)
-      ctx.fill()
-    }
-    ctx.fillStyle = on ? GOLD : '#16305a'
-    ctx.beginPath()
-    ctx.roundRect(r.x, r.y, r.w, r.h, 20)
-    ctx.fill()
-    ctx.restore()
-    railIcon(it.id, r.x + 14, r.y + r.h / 2 - 21, on)
-    const ink = on ? '#0b1a36' : INK
-    const room = r.w - 70 - 16
-    if (it.type) {
-      // Room for the ‹ › arrows whether or not it's selected, so the text doesn't jump.
-      const value = menu.display(it)
-      ;(on ? plain : text)(it.label, r.x + 70, r.y + 24, fitFont(rubik, 19 * rs, room - 56, it.label), on ? '#0b1a36' : QUIET, 'left')
-      ;(on ? plain : text)(value, r.x + 70, r.y + 50, fitFont(rubik, 21 * rs, room - 56, value), ink, 'left')
-      if (on) plain('‹  ›', r.x + r.w - 18, r.y + r.h / 2 + 1, rubik(26), ink, 'right')
-    } else (on ? plain : text)(it.label, r.x + 70, r.y + r.h / 2 + 1, fitFont(rubik, 23 * rs, room, it.label), ink, 'left')
-  })
-  const prompt = (label, words, x, y) => {
-    ctx.font = rubik(17 * rs)
-    const w = ctx.measureText(label).width + 16
-    panel(x, y - 13 * rs, w, 26 * rs, 7, INK)
-    plain(label, x + w / 2, y + 1, rubik(17 * rs), '#0b1a36')
-    plain(words, x + w + 8, y + 1, rubik(17 * rs, 500), QUIET, 'left')
-    ctx.font = rubik(17 * rs, 500)
-    return x + w + 8 + ctx.measureText(words).width + 18
-  }
-  let px = wardrobe ? prompt('◀ ▶', 'change', 34, H - 40) : prompt(input.label('a'), 'choose', 34, H - 40)
-  prompt(input.dpadLabel(), 'move', px, H - 40)
+  railTiles(menu, rs, wardrobe)
   // The card: what the highlighted tile does.
   if (wardrobe) return
   const sel = menu.selected?.id
@@ -1422,10 +1603,9 @@ const SETTING_TEXT = {
   sfx: 'Swishes, cracks, splashes and cheers.',
   reducedShake: 'Keeps the camera steadier on the big moments.',
   textScale: 'Bigger words on the TV, for the back of the room.',
-  graphics: 'Auto picks for this machine. Low runs smoother on slow ones; High is the full look, with soft shadows and swaying grass.',
-  strength: 'How hard you swing for a full shot. Less suits kids, small rooms and gentle swingers.',
-  assist: 'How much the game straightens your hooks and slices, and reads the putts for you.',
+  graphics: 'High is the full look at your screen\'s own sharpness, with soft shadows and swaying grass. Low runs smoother on slow machines.',
   flipFace: 'If your slices curve the wrong way on your phone, turn this on.',
+  hints: 'How to swing, on screen. Auto shows it for your first shots and again if you stand at the ball a while; Always every shot; Off never.',
   back: ''
 }
 
@@ -1625,23 +1805,6 @@ function settingIcon(id, x, y, on) {
     ctx.lineTo(1, 2)
     ctx.moveTo(-2.5, -1.5)
     ctx.lineTo(4.5, -1.5)
-  } else if (id === 'strength') {
-    // A lightning bolt.
-    ctx.moveTo(2, -11)
-    ctx.lineTo(-6, 2)
-    ctx.lineTo(0, 2)
-    ctx.lineTo(-2, 11)
-    ctx.lineTo(6, -2)
-    ctx.lineTo(0, -2)
-    ctx.closePath()
-  } else if (id === 'assist') {
-    // A straight arrow out of a curve.
-    ctx.moveTo(-10, 9)
-    ctx.quadraticCurveTo(-10, -2, 0, -2)
-    ctx.lineTo(10, -2)
-    ctx.moveTo(5, -7)
-    ctx.lineTo(10, -2)
-    ctx.lineTo(5, 3)
   } else if (id === 'flipFace') {
     ctx.moveTo(-10, -4)
     ctx.lineTo(9, -4)
@@ -1674,7 +1837,47 @@ function railIcon(id, x, y, on) {
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   ctx.beginPath()
-  if (id === 'party') {
+  if (id === 'resume') {
+    ctx.moveTo(-5, -9)
+    ctx.lineTo(9, 0)
+    ctx.lineTo(-5, 9)
+    ctx.closePath()
+  } else if (id === 'restart') {
+    ctx.arc(0, 0, 9, -Math.PI * 0.35, Math.PI * 1.45)
+    ctx.moveTo(9, -10)
+    ctx.lineTo(6, -3)
+    ctx.lineTo(-1, -6)
+  } else if (id === 'pick') {
+    // Four tiles: choose a game.
+    ctx.roundRect(-10, -10, 8, 8, 2)
+    ctx.roundRect(2, -10, 8, 8, 2)
+    ctx.roundRect(-10, 2, 8, 8, 2)
+    ctx.roundRect(2, 2, 8, 8, 2)
+  } else if (id === 'title') {
+    // A clubhouse.
+    ctx.moveTo(-10, -1)
+    ctx.lineTo(0, -10)
+    ctx.lineTo(10, -1)
+    ctx.moveTo(-7, -3)
+    ctx.lineTo(-7, 9)
+    ctx.lineTo(7, 9)
+    ctx.lineTo(7, -3)
+    ctx.moveTo(-2, 9)
+    ctx.lineTo(-2, 3)
+    ctx.lineTo(2, 3)
+    ctx.lineTo(2, 9)
+  } else if (id === QUIT_TO_LIBRARY) {
+    // A door with an arrow out of it.
+    ctx.moveTo(1, -10)
+    ctx.lineTo(9, -10)
+    ctx.lineTo(9, 10)
+    ctx.lineTo(1, 10)
+    ctx.moveTo(4, 0)
+    ctx.lineTo(-10, 0)
+    ctx.moveTo(-5, -5)
+    ctx.lineTo(-10, 0)
+    ctx.lineTo(-5, 5)
+  } else if (id === 'party') {
     ctx.roundRect(-6, -11, 12, 22, 3)
     ctx.moveTo(-2, 7)
     ctx.lineTo(2, 7)
@@ -1750,6 +1953,17 @@ function railIcon(id, x, y, on) {
     ctx.arc(0, 0, 8, 0, Math.PI * 2)
     ctx.moveTo(4, 0)
     ctx.arc(0, 0, 4, 0, Math.PI * 2)
+  } else if (id === 'level') {
+    // Three steps, rising: easy, normal, pro.
+    ctx.moveTo(-11, 10)
+    ctx.lineTo(-11, 4)
+    ctx.lineTo(-4, 4)
+    ctx.lineTo(-4, -3)
+    ctx.lineTo(3, -3)
+    ctx.lineTo(3, -10)
+    ctx.lineTo(10, -10)
+    ctx.lineTo(10, 10)
+    ctx.closePath()
   } else if (id === 'done') {
     ctx.moveTo(-8, 0)
     ctx.lineTo(-2, 6)
@@ -1767,113 +1981,476 @@ function railIcon(id, x, y, on) {
   ctx.restore()
 }
 
-/** Top-left: who's up, their club and aim. Top-right: pause and everyone's score. */
-function drawHud(s) {
-  if (!s) return
-  const club = CLUBS[s.club]
-  panel(28, 24, 430, 112)
-  dot(58, 58, 14, s.color)
-  const who = s.name === s.crew.name ? s.name : `${s.name} · ${s.crew.name}`
-  text(who.length > 16 ? who.slice(0, 15) + '…' : who, 84, 59, body(30), INK, 'left')
-  if (isPutting()) {
-    const putt = s.done ? '' : ` · putt ${s.strokes + 1}`
-    text(isPutts() ? `Hole ${state.hole + 1} of ${PT.holes}${putt}` : isCourse() ? `Par ${HOLE.par} · stroke ${s.strokes + 1}` : 'Putting', 440, 59, body(22, 500), QUIET, 'right')
-    if (s.ball && s.cup) text(puttRead(s), 48, 104, body(26), GOLD, 'left')
-    const a = Math.round(s.paim * 2) / 2
-    text(a ? `Aim ${Math.abs(a)}° ${a > 0 ? 'R' : 'L'}` : 'Aim at the cup', 440, 104, body(22, 500), INK, 'right')
-  } else {
-    const where = isCourse() && s.ball ? `Stroke ${s.strokes + 1} · ${Math.round(yardsToPin(s.ball))} yd to pin` : isTargets() ? `Ball ${Math.min(TUNING.targets.balls, s.shots.length + (state.phase === 'aim' || state.phase === 'meter' ? 1 : 0))} of ${TUNING.targets.balls}` : 'Practice'
-    text(where, 440, 59, fitFont((px) => body(px / ts(), 500), 22 * ts(), 230, where), QUIET, 'right')
-    text(`${club.name} · ${club.carry} yd`, 48, 104, body(26), GOLD, 'left')
-    text(Math.round(s.aim) ? `Aim ${Math.abs(Math.round(s.aim))}° ${s.aim > 0 ? 'R' : 'L'}` : 'Aim straight', 440, 104, body(22, 500), INK, 'right')
-  }
-  // Pause button.
-  panel(PAUSE_BUTTON.x, PAUSE_BUTTON.y, PAUSE_BUTTON.w, PAUSE_BUTTON.h, 14)
+/** The pause button, for mouse and touch (controllers and keys have Start / Esc). */
+function drawPauseButton() {
+  hud.pause = true
+  panel(PAUSE_BUTTON.x, PAUSE_BUTTON.y, PAUSE_BUTTON.w, PAUSE_BUTTON.h, 14, 'rgba(11,26,54,0.6)')
   ctx.fillStyle = INK
   ctx.fillRect(PAUSE_BUTTON.x + 18, PAUSE_BUTTON.y + 16, 7, 24)
   ctx.fillRect(PAUSE_BUTTON.x + 31, PAUSE_BUTTON.y + 16, 7, 24)
-  // Scores under the pause button.
-  state.seats.forEach((o, i) => {
-    const y = 104 + i * 44
-    panel(W - 300, y, 268, 38, 12, o === s ? 'rgba(11,26,54,0.9)' : 'rgba(11,26,54,0.6)')
-    dot(W - 280, y + 19, 8, o.color)
-    text(o.name.slice(0, 10), W - 264, y + 20, body(20, 500), connected(o) ? INK : QUIET, 'left')
-    text(scoreText(o), W - 44, y + 20, body(22), o === s ? GOLD : INK, 'right')
-  })
+}
+/**
+ * What the HUD showed this frame (tests): the how-to hint, the scoreboard, the pause button, the
+ * result's readout ('strip' or null), and the meter's cup mark (0–1 of its bar).
+ */
+let hud = {}
+/** Turns each kind of input has had this session (hint()). */
+const hintTurns = new Map()
+/** A seat's kind of input, for hints: each phone on its own; this machine by how it's played; swing or putt. */
+const hintKind = (s) => `${s?.kind === 'phone' ? s.id : input.mode}:${isPutting() ? 'putt' : 'swing'}`
+/**
+ * Show the how-to? "Button hints": Auto shows it for the first two turns of each kind (a phone,
+ * the keys, touch; swing or putt) and again when someone has stood at the ball for 7 s; Always;
+ * Off. Experienced players get a clean screen; nobody is left stuck.
+ */
+function hint(kind) {
+  const mode = settings.data.hints ?? 'auto'
+  if (mode === 'off') return false
+  if (mode === 'always') return true
+  return (hintTurns.get(kind) ?? 0) <= 2 || (state.aimFor ?? 0) > 7
+}
 
-  if (state.phase === 'safety') return drawSafety()
+/**
+ * The HUD, game-style corners: a hole card top left (when there's a hole, ball or stroke to
+ * count), everyone's chip along the top with two or more players (the one up raised), the shot
+ * panel bottom right (the club and a power arc), a name tag over the golfer and the distance over
+ * the flag, in the scene. The middle of the screen is left to the golf: how-to only when it
+ * helps (in a card over the shot panel), one result said once as a ribbon, and a phone player's
+ * detailed numbers on their phone.
+ */
+/**
+ * A player's level as a small pill (Easy in lime, Pro in pink; Normal shows nothing), its left
+ * edge at x and centred on y. Returns its width (0 for none); draw: false only measures it, and
+ * dark: true is a navy pill with the level's colour as its words (on a coloured name tag).
+ */
+function levelTag(s, x, y, px, { draw = true, dark = false } = {}) {
+  if (!s?.level || s.level === 'normal') return 0
+  const label = levelOf(s.level).label
+  const font = rubik(px * Math.min(ts(), 1.2), 800)
+  ctx.font = font
+  const w = Math.round(ctx.measureText(label).width + px)
+  if (!draw) return w
+  const h = Math.round(px * 1.45)
+  const color = s.level === 'easy' ? LIME : PINK
+  panel(x, y - h / 2, w, h, h / 2, dark ? '#0b1a36' : color)
+  plain(label, x + w / 2, y + 1, font, dark ? color : '#0b1a36')
+  return w
+}
+
+function drawHud(s) {
+  hud = {}
+  if (!s) return
+  if (state.phase === 'lineup') {
+    drawLineup()
+    if (input.mode === 'mouse' || input.mode === 'touch') drawPauseButton()
+    return
+  }
+  const aiming = state.phase === 'aim' || state.phase === 'meter'
+  holeBadge(s)
+  if (aiming) {
+    clubCard(s)
+    nameTag(s)
+    pinTag(s)
+  }
+  const pointer = input.mode === 'mouse' || input.mode === 'touch'
+  // Pause: a button for mouse and touch; controllers and keys have Start / Esc.
+  if (pointer) drawPauseButton()
+  // Everyone's chip along the top: only when there's someone to compare with.
+  if (state.seats.length > 1) playerStrip(s)
+
   // The middle and bottom of the HUD sit DY lower on a taller screen.
   ctx.save()
   ctx.translate(0, DY)
-  if (state.phase === 'aim' || state.phase === 'meter') drawAimHelp(s)
+  if ((state.phase === 'aim' || state.phase === 'meter') && state.screen !== 'paused') drawAimHelp(s) // not behind the pause menu
   if (state.phase === 'meter') drawMeter()
   if (state.phase === 'flight' && state.shot?.putt && state.shot.pos) {
     // Rolling: how far it still is from the cup.
     const p = state.shot.pos
     const ft = Math.hypot(p.x - state.shot.cup.x, p.z - state.shot.cup.z) / FT
-    text(ft < 10 ? ft.toFixed(1) : `${Math.round(ft)}`, W / 2, 96, head(84), INK)
-    text('feet to the cup', W / 2, 150, body(24, 500), QUIET)
+    const top = hud.scoreboard ? 36 : 0 // under the players' chips
+    text(ft < 10 ? ft.toFixed(1) : `${Math.round(ft)}`, W / 2, 84 + top, head(64), INK)
+    text('ft to the cup', W / 2, 128 + top, body(20, 500), QUIET)
   } else if (state.phase === 'flight' && state.shot?.pos) {
     const p = state.shot.pos
     const o = state.shot.from ?? { x: 0, z: 0 }
     const yd = Math.round(Math.hypot(p.x - o.x, p.z - o.z) / YD)
-    text(`${yd}`, W / 2, 96, head(84), INK)
-    text('yards', W / 2, 150, body(24, 500), QUIET)
+    const top = hud.scoreboard ? 36 : 0
+    text(`${yd}`, W / 2, 84 + top, head(64), INK)
+    text('yards', W / 2, 128 + top, body(20, 500), QUIET)
   }
   if (state.phase === 'result' && state.shot) state.shot.putt ? drawPuttReadout(state.shot) : drawReadout(state.shot)
   ctx.restore()
-  if (state.banner) {
-    const t = state.banner.t
-    const pop = 1 + Math.max(0, 0.3 - t) * 1.8
-    ctx.save()
-    ctx.translate(W / 2, 250 + DY)
-    ctx.scale(pop, pop)
-    text(state.banner.text, 0, 0, head(state.banner.text.length > 10 ? 72 : 96), state.banner.color)
-    if (state.banner.sub) text(state.banner.sub, 0, 66, body(28), INK)
-    ctx.restore()
-  }
-  if (state.mode === 'practice' && state.recent.length) drawMap()
+  // The moment: one ribbon, said once, that bounces in and fades.
+  if (state.banner) drawBanner(state.banner)
+  if (state.mode === 'practice' && state.recent.length && state.phase !== 'flight') drawMap()
   if (isCourse() && state.phase !== 'flight') drawHoleMap(s)
-  drawJoinBadge(ctx, party, 32, H - 90)
+  // Join with code: top right (the bottom left is the club card's).
+  drawJoinBadge(ctx, party, W - 210 - (pointer ? 104 : 32), 32)
 }
 
-/** Before you swing: room, grip, a smooth swing; who has read it on their phone. */
-function drawSafety() {
-  veil(0.55)
+/** Along the top: a chip per player in their colour with their score, the one up raised and ringed. */
+function playerStrip(s) {
+  hud.scoreboard = true
+  const rs = Math.min(ts(), 1.2)
+  const seats = state.seats
+  const chips = seats.map((o) => {
+    const up = o === s
+    const r = Math.round((up ? 19 : 15) * rs)
+    const name = o.name.slice(0, 9)
+    const nameFont = rubik((up ? 19 : 16) * rs)
+    const scoreFont = rubik(14 * rs, 500)
+    ctx.font = nameFont
+    const tw = Math.max(ctx.measureText(name).width, (ctx.font = scoreFont, ctx.measureText(scoreText(o)).width))
+    return { o, up, r, name, nameFont, scoreFont, w: 8 + 2 * r + 10 + tw + 18, h: 2 * r + 14 }
+  })
+  const gap = 10
+  let x = W / 2 - (chips.reduce((a, c) => a + c.w, 0) + gap * (chips.length - 1)) / 2
+  hud.strip = chips.map((c) => c.name)
+  const b = state.banner
+  for (const c of chips) {
+    const y = 18 + (c.up ? 6 : 0)
+    panel(x, y + 5, c.w, c.h, c.h / 2, 'rgba(5,14,33,0.35)')
+    if (c.up) panel(x - 3, y - 3, c.w + 6, c.h + 6, c.h / 2 + 3, GOLD)
+    panel(x, y, c.w, c.h, c.h / 2, c.up ? 'rgba(15,33,71,0.95)' : 'rgba(15,33,71,0.78)')
+    dot(x + 8 + c.r, y + c.h / 2, c.r + 2, '#ffffff')
+    dot(x + 8 + c.r, y + c.h / 2, c.r, c.o.color)
+    plain(c.name[0].toUpperCase(), x + 8 + c.r, y + c.h / 2 + 2, lilita(c.r * 1.1), '#ffffff')
+    const tx = x + 8 + 2 * c.r + 10
+    plain(c.name, tx, y + c.h / 2 - 8 * rs, c.nameFont, connected(c.o) ? INK : QUIET, 'left')
+    plain(scoreText(c.o), tx, y + c.h / 2 + 11 * rs, c.scoreFont, c.up ? GOLD : QUIET, 'left')
+    // Points just won pop up beside the chip.
+    if (c.up && b?.points && b.t < 2.4) {
+      const pop = 1 + Math.max(0, 0.25 - b.t) * 2
+      ctx.save()
+      ctx.globalAlpha = clamp(1 - (b.t - 1.8) / 0.6, 0, 1)
+      ctx.translate(x + c.w + 30, y + c.h / 2 - Math.min(b.t, 0.4) * 20)
+      ctx.scale(pop, pop)
+      text(`+${b.points}`, 0, 2, lilita(30 * rs), LIME)
+      ctx.restore()
+    }
+    x += c.w + gap
+  }
+}
+
+/** A colour darker (k = 0..1 toward black), for a ribbon's shadow and tails. */
+function shade(hex, k) {
+  const n = parseInt(hex.slice(1), 16)
+  const ch = (v) => Math.round(v * (1 - k))
+  return `rgb(${ch(n >> 16)}, ${ch((n >> 8) & 255)}, ${ch(n & 255)})`
+}
+
+/** The moment: a ribbon in the shot's colour that bounces in, its numbers as chips under it, then fades. */
+function drawBanner(b) {
+  const t = b.t
+  const fade = clamp(1 - (t - 2.4) / 0.6, 0, 1)
+  if (fade <= 0) return
+  // A bounce: overshoot, settle.
+  const pop = t < 0.35 ? 0.6 + (t / 0.35) * 0.55 : 1 + Math.max(0, 0.15 - (t - 0.35)) * 1
+  const rs = Math.min(ts(), 1.2)
+  const size = (b.text.length > 10 ? 58 : 80) * rs
+  const font = lilita(size)
+  ctx.font = font
+  const tw = ctx.measureText(b.text).width
+  const rw = tw + 110
+  const rh = size * 1.18
+  const fill = b.color?.startsWith('#') ? b.color : GOLD
+  ctx.save()
+  ctx.globalAlpha = fade
+  ctx.translate(W / 2, 256 + DY)
+  ctx.scale(pop, pop)
+  hud.banner = b.text
+  ctx.save()
+  ctx.rotate(-0.045)
+  // The tails, folded behind.
+  ctx.fillStyle = shade(fill, 0.28)
+  for (const side of [-1, 1]) {
+    const ex = side * (rw / 2 + 36)
+    const ix = side * (rw / 2 - 14)
+    ctx.beginPath()
+    ctx.moveTo(ix, -rh * 0.28)
+    ctx.lineTo(ex, -rh * 0.28)
+    ctx.lineTo(ex - side * 18, rh * 0.06)
+    ctx.lineTo(ex, rh * 0.4)
+    ctx.lineTo(ix, rh * 0.4)
+    ctx.closePath()
+    ctx.fill()
+  }
+  panel(-rw / 2, -rh / 2 + 9, rw, rh, 20, shade(fill, 0.4))
+  panel(-rw / 2 - 4, -rh / 2 - 4, rw + 8, rh + 8, 23, '#ffffff')
+  panel(-rw / 2, -rh / 2, rw, rh, 20, fill)
+  ctx.textBaseline = 'middle'
+  ctx.lineJoin = 'round'
+  ctx.lineWidth = 9 * rs
+  ctx.strokeStyle = shade(fill, 0.62)
+  ctx.font = font
+  ctx.textAlign = 'center'
+  ctx.strokeText(b.text, 0, 4)
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText(b.text, 0, 4)
+  ctx.restore()
+  // Under it, the numbers that matter as chips (the carry in gold), or its one line.
+  const chips = b.chips ?? (b.sub ? [{ text: b.sub }] : [])
+  const cf = rubik(22 * rs, 800)
+  ctx.font = cf
+  const widths = chips.map((c) => ctx.measureText(c.text).width + 32)
+  let cx = -(widths.reduce((a, w) => a + w, 0) + 12 * (chips.length - 1)) / 2
+  const cy = rh / 2 + 22
+  chips.forEach((c, i) => {
+    panel(cx, cy + 4, widths[i], 42, 21, 'rgba(5,14,33,0.3)')
+    panel(cx, cy, widths[i], 42, 21, c.gold ? GOLD : 'rgba(15,33,71,0.92)')
+    plain(c.text, cx + widths[i] / 2, cy + 22, cf, c.gold ? '#0b1a36' : INK)
+    cx += widths[i] + 12
+  })
+  ctx.restore()
+}
+
+/** Top left: the hole (or ball) badge, when there's a hole, ball or stroke to count. */
+function holeBadge(s) {
+  let num
+  let title
+  let sub
+  if (isCourse()) [num, title, sub] = [String(state.hole + 1), `Par ${hole().par}`, s.done ? 'Holed' : `Stroke ${s.strokes + 1}`]
+  else if (isPutts()) [num, title, sub] = [String(state.hole + 1), `Hole ${state.hole + 1} of ${PT.holes}`, s.done ? 'Holed' : `Putt ${s.strokes + 1}`]
+  else if (isTargets()) {
+    // The ball being played counts from the address until it's scored (finishShot records it).
+    const ball = Math.min(TUNING.targets.balls, s.shots.length + (state.phase === 'aim' || state.phase === 'meter' || state.phase === 'flight' ? 1 : 0))
+    ;[num, title, sub] = [String(ball), `Ball ${ball} of ${TUNING.targets.balls}`, 'Target challenge']
+  } else return
+  hud.badge = title
+  // A navy card: the num in a gold disc, the title, and the line under it.
+  const rs = Math.min(ts(), 1.2)
+  const titleFont = lilita(28 * rs)
+  const subFont = rubik(16 * rs)
+  ctx.font = titleFont
+  const tw = ctx.measureText(title).width
+  ctx.font = subFont
+  const sw = ctx.measureText(sub).width
+  const r = Math.round(26 * rs)
+  const h = 2 * r + 28
+  const w = 14 + 2 * r + 14 + Math.max(tw, sw) + 26
+  panel(28, 28, w, h, 22, 'rgba(5,14,33,0.35)')
+  panel(28, 22, w, h, 22, 'rgba(15,33,71,0.92)')
+  dot(42 + r, 22 + h / 2, r, GOLD)
+  plain(num, 42 + r, 22 + h / 2 + 2, lilita(30 * rs), '#0b1a36')
+  plain(title, 42 + 2 * r + 14, 22 + h / 2 - 10 * rs, titleFont, INK, 'left')
+  plain(sub, 42 + 2 * r + 14, 22 + h / 2 + 17 * rs, subFont, QUIET, 'left')
+}
+
+/**
+ * The power the shot has so far, for the shot panel's arc: { v, mark } with v from 0 to
+ * TUNING.swing.maxPower (1 is a full swing), the phone's live backswing or the meter's.
+ */
+function shotPower(s) {
+  if (s.kind === 'phone') {
+    const inp = party.inputs[s.id] ?? {}
+    if (!inp.a) return { v: 0 }
+    const sw = party.public.swing ?? {}
+    const down = inp.swp === 'down' || inp.swp === 'done'
+    const v = clamp((Number(down ? inp.bk : inp.sw) || 0) / (sw.backFull || 200), 0, 1)
+    return { v, mark: isPutting() ? (party.views?.[s.id]?.puttMark ?? null) : null, live: true }
+  }
+  if (state.phase === 'meter' && state.meter) return { v: Math.max(0, state.meter.stage === 'power' ? state.meter.v : state.meter.power), live: true }
+  return { v: 0 }
+}
+
+/** Bottom right: the shot panel: the club, how far it carries (or the putt's read), the clubs as pips, and the power arc. */
+function clubCard(s) {
+  const putting = isPutting()
+  const club = CLUBS[s.club]
+  const short = putting ? 'PT' : club.short
+  const name = putting ? 'Putter' : club.name
+  const line = putting ? (s.ball && s.cup ? puttRead(s) : '') : sandCarry(s, club) < 1 ? `${Math.round(club.carry * sandCarry(s, club))} yd from sand` : inSand(s) ? `${club.carry} yd · good from sand` : `${club.carry} yd carry`
+  const aim = putting ? Math.round(s.paim * 2) / 2 : Math.round(s.aim)
+  const aimText = aim ? `aim ${Math.abs(aim)}° ${aim > 0 ? 'right' : 'left'}` : ''
+  hud.club = `${short} ${name}`
+  const rs = Math.min(ts(), 1.2)
+  const nameFont = lilita(28 * rs)
+  const lineFont = rubik(18 * rs)
+  const aimFont = rubik(15 * rs, 500)
+  ctx.font = nameFont
+  let tw = ctx.measureText(name).width
+  ctx.font = lineFont
+  tw = Math.max(tw, ctx.measureText(line).width)
+  ctx.font = aimFont
+  tw = Math.max(tw, aimText ? ctx.measureText(aimText).width : 0, putting ? 0 : CLUBS.length * 26)
+  const sq = Math.round(76 * rs)
+  const h = sq + 28
+  const arcW = Math.round(124 * rs)
+  const w = 14 + sq + 16 + tw + 14 + arcW + 10
+  const x = W - 28 - w
+  // Above the touch buttons' row when there are touch buttons (layout()).
+  const y = (input.mode === 'touch' || input.mode === 'mouse') && s.kind !== 'phone' ? TOUCH.clubL.y - 40 - h : H - 28 - h
+  hud.clubCard = { x, y, w, h }
+  panel(x, y + 6, w, h, 24, 'rgba(5,14,33,0.35)')
+  panel(x, y, w, h, 24, 'rgba(15,33,71,0.92)')
+  panel(x + 14, y + 14, sq, sq, 18, INK)
+  plain(short, x + 14 + sq / 2, y + 14 + sq / 2 + 2, fitFont(lilita, 36 * rs, sq - 12, short), '#0b1a36')
+  const tx = x + 14 + sq + 16
+  plain(name, tx, y + h / 2 - 22 * rs, nameFont, INK, 'left')
+  plain(line, tx, y + h / 2 + 6 * rs, lineFont, GOLD, 'left')
+  if (aimText) plain(aimText, tx, y + h / 2 + 30 * rs, aimFont, QUIET, 'left')
+  else if (!putting) {
+    // Which club of the bag, as pips: the one in hand gold.
+    CLUBS.forEach((c, i) => panel(tx + i * 26, y + h / 2 + 26 * rs, 22, 8, 4, i === s.club ? GOLD : 'rgba(255,255,255,0.22)'))
+  }
+  // The power arc: a half ring that fills as the backswing (or the meter) builds power, lime at
+  // full, a white tick at full (and at the putt's pace mark with the help).
+  const p = shotPower(s)
+  const max = TUNING.swing.maxPower
+  const cx = x + w - 10 - arcW / 2
+  const cy = y + h / 2 + 22 * rs
+  const R = arcW / 2 - 12
+  hud.power = p.v
+  ctx.save()
+  ctx.lineCap = 'round'
+  ctx.lineWidth = 15 * rs
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'
+  ctx.beginPath()
+  ctx.arc(cx, cy, R, Math.PI, 0)
+  ctx.stroke()
+  if (p.v > 0.01) {
+    ctx.strokeStyle = p.v >= 0.98 && p.v <= 1.05 ? LIME : p.v > 1.05 ? PINK : GOLD
+    ctx.beginPath()
+    ctx.arc(cx, cy, R, Math.PI, Math.PI + Math.PI * Math.min(1, p.v / max))
+    ctx.stroke()
+  }
+  const tick = (k, color) => {
+    const a = Math.PI + Math.PI * Math.min(1, k / max)
+    ctx.strokeStyle = color
+    ctx.lineWidth = 4
+    ctx.beginPath()
+    ctx.moveTo(cx + Math.cos(a) * (R - 11 * rs), cy + Math.sin(a) * (R - 11 * rs))
+    ctx.lineTo(cx + Math.cos(a) * (R + 11 * rs), cy + Math.sin(a) * (R + 11 * rs))
+    ctx.stroke()
+  }
+  tick(1, INK)
+  if (p.mark != null) tick(Math.min(1, p.mark), LIME)
+  ctx.restore()
+  plain(p.live ? `${Math.round(p.v * 100)}%` : '—', cx, cy - 12 * rs, lilita(26 * rs), INK)
+  plain('POWER', cx, cy + 8 * rs, rubik(11 * rs, 500), QUIET)
+}
+
+/** A tag over the golfer's head: who's up. */
+function nameTag(s) {
+  const p = view.headOf(s.look.id)
+  if (!p || p.y < 40 || p.y > H - 40 || p.x < 40 || p.x > W - 40) return
+  hud.nameTag = s.name
+  const font = rubik(18 * Math.min(ts(), 1.2), 800)
+  // The player's level after the name (Easy / Pro; Normal has none).
+  const tag = levelTag(s, 0, 0, 14, { draw: false })
+  ctx.font = font
+  const nw = ctx.measureText(s.name).width
+  const w = nw + 24 + (tag ? tag + 8 : 0)
+  const y = Math.max(12, p.y - 34) // close up, the head can be near the top: keep the tag on screen
+  panel(p.x - w / 2, y, w, 30, 12, s.color)
+  ctx.fillStyle = s.color
+  ctx.beginPath()
+  ctx.moveTo(p.x - 7, y + 29)
+  ctx.lineTo(p.x + 7, y + 29)
+  ctx.lineTo(p.x, y + 37)
+  ctx.fill()
+  plain(s.name, p.x - w / 2 + 12 + nw / 2, y + 16, font, '#0b1a36')
+  if (tag) levelTag(s, p.x - w / 2 + 12 + nw + 8, y + 15, 14, { dark: true })
+}
+
+/** Over the flag: how far it is (yards on the course, feet on the green). */
+function pinTag(s) {
+  if (!s.ball || !s.cup) return
+  const p = view.flagTop()
+  // Close to the green the flag's top can be above the screen: the tag then rides the top edge.
+  if (!p || p.y > H - 80 || p.x < 60 || p.x > W - 60) return
+  const putting = isPutting()
+  const ft = putting ? readPutt(s.ball, s.cup, greenOf()).feet : 0
+  const words = putting ? `${ft < 10 ? ft.toFixed(1) : Math.round(ft)} ft` : `${Math.round(yardsToPin(s.ball, s.cup))} yd`
+  hud.pinTag = words
+  const font = lilita(26 * Math.min(ts(), 1.2))
+  ctx.font = font
+  const w = ctx.measureText(words).width + 28
+  const y = Math.max(12, p.y - 46)
+  panel(p.x - w / 2, y, w, 38, 14, 'rgba(11,26,54,0.8)')
+  ctx.fillStyle = 'rgba(11,26,54,0.8)'
+  ctx.beginPath()
+  ctx.moveTo(p.x - 8, y + 38)
+  ctx.lineTo(p.x + 8, y + 38)
+  ctx.lineTo(p.x, y + 48)
+  ctx.fill()
+  plain(words, p.x, y + 21, font, INK)
+}
+
+const TIPS = [
+  ['Give yourself room', 'Stand where a full swing can’t reach anyone or anything: people, pets, the TV, lamps.', TEAL, 'room'],
+  ['Hold on tight', 'Grip your phone in both hands all the way through the swing. A grippy case or a wrist strap helps.', PINK, 'grip'],
+  ['Smooth beats hard', 'A smooth swing reads just as well as a wild one. Never let go of the phone.', LIME, 'smooth']
+]
+const LEVEL_COLOR = { easy: LIME, normal: TEAL, pro: PINK }
+/**
+ * The Line-up, before the first swing of every game: a card per player with their level (what it
+ * does, in a line) and whether they're ready, the beans lined up behind, and on a party's first
+ * game the safety tips across the top.
+ */
+function drawLineup() {
+  veil(0.35)
   ctx.save()
   ctx.translate(0, DY)
-  panel(W / 2 - 430, 70, 860, 680, 26)
-  text('Before you swing', W / 2, 130, head(60), GOLD)
-  const tips = [
-    ['Give yourself room', 'Stand where a full swing can’t reach anyone or anything: people, pets, the TV, lamps.', TEAL, 'room'],
-    ['Hold on tight', 'Grip your phone in both hands all the way through the swing. A grippy case or a wrist strap helps.', PINK, 'grip'],
-    ['Smooth beats hard', 'A smooth swing reads just as well as a wild one. Never let go of the phone.', LIME, 'smooth']
-  ]
-  tips.forEach(([t, line, color, icon], i) => {
-    const y = 210 + i * 118
-    dot(W / 2 - 350, y + 20, 34, color)
-    safetyIcon(icon, W / 2 - 350, y + 20)
-    text(t, W / 2 - 296, y, body(32), INK, 'left')
-    wrap(line, W / 2 - 296, y + 40, 660, body(22, 500), QUIET)
+  const game = MODES.find((m) => m.value === state.mode)?.title ?? ''
+  text('Line-up', W / 2, 66, head(56), GOLD)
+  text(game, W / 2, 112, fitFont((px) => body(px, 500), 24, W - 200, game), INK)
+  if (state.tipsGame) {
+    // Before you swing: three tips in a strip.
+    const tw = Math.min(1180, W - 60)
+    const col = tw / 3
+    const x0 = W / 2 - tw / 2
+    panel(x0, 142, tw, 130, 22)
+    TIPS.forEach(([t, line, color, icon], i) => {
+      const x = x0 + i * col
+      dot(x + 44, 180, 24, color)
+      ctx.save()
+      ctx.translate(x + 44, 180)
+      ctx.scale(0.7, 0.7)
+      ctx.translate(-(x + 44), -180)
+      safetyIcon(icon, x + 44, 180)
+      ctx.restore()
+      text(t, x + 80, 176, fitFont(body, 22, col - 96, t), INK, 'left')
+      wrap(line, x + 24, 218, col - 40, body(16, 500), QUIET, text, 21)
+    })
+  }
+  // A card per player.
+  const n = state.seats.length
+  const gap = 16
+  const cw = Math.min(290, (W - 60 - (n - 1) * gap) / n)
+  const ch = 196
+  const y = state.tipsGame ? 292 : 150 // above the beans at the tee
+  const x0 = W / 2 - (n * cw + (n - 1) * gap) / 2
+  const solo = state.seats[0]?.kind === 'tv'
+  state.seats.forEach((x, i) => {
+    const cx = x0 + i * (cw + gap)
+    const L = levelOf(x.level)
+    const ready = state.ready.has(x.id)
+    const here = connected(x)
+    panel(cx, y, cw, ch, 22, ready ? 'rgba(11,26,54,0.94)' : 'rgba(11,26,54,0.8)')
+    ctx.save()
+    ctx.globalAlpha = here ? 1 : 0.5
+    dot(cx + 26, y + 30, 11, x.color)
+    text(x.name, cx + 46, y + 31, fitFont(body, 24, cw - 64, x.name), INK, 'left')
+    // The level: a big pill in its colour, and what it does.
+    const pw = cw - 32
+    panel(cx + 16, y + 56, pw, 46, 23, LEVEL_COLOR[L.id])
+    plain(L.label, cx + 16 + pw / 2, y + 80, head(30), '#0b1a36')
+    const subFont = body(15, 500)
+    wrapLines(L.sub, cw - 32, subFont).slice(0, 2).forEach((line, k) => text(line, cx + cw / 2, y + 122 + k * 20, subFont, QUIET))
+    // Ready, or how to pick.
+    const status = x.kind === 'phone' ? (ready ? 'Ready ✓' : 'Picking on their phone…') : x.kind === 'local' ? (ready ? 'Ready ✓' : `◀ ▶ level · ${input.label('a')} ready`) : '◀ ▶ to change'
+    text(status, cx + cw / 2, y + 172, fitFont(body, 19, cw - 24, status), ready ? LIME : x.kind === 'phone' ? QUIET : GOLD)
+    ctx.restore()
   })
-  // Who has read it.
-  const phones = state.seats.filter((x) => x.kind === 'phone' && connected(x))
-  const w = 180
-  const x0 = W / 2 - (phones.length * w) / 2
-  phones.forEach((x, i) => {
-    const ready = state.safe.has(x.id)
-    const cx = x0 + i * w + w / 2
-    panel(cx - 82, 572, 164, 44, 22, ready ? 'rgba(182,240,74,0.22)' : 'rgba(255,255,255,0.08)')
-    dot(cx - 60, 594, 9, x.color)
-    text(x.name.length > 8 ? x.name.slice(0, 7) + '…' : x.name, cx - 44, 595, body(20), INK, 'left')
-    text(ready ? '✓' : '…', cx + 62, 595, body(24), ready ? LIME : QUIET, 'right')
-  })
-  text('Everyone taps I’m ready on their phone', W / 2, 648, body(22, 500), INK)
-  if (state.safetyTime > TUNING.safetyMin) {
+  // How it starts.
+  const early = solo || !state.tipsGame || state.lineupTime > TUNING.safetyMin
+  if (!solo) text(state.seats.some((x) => x.kind === 'phone') ? 'Pick your level on your phone, then tap I’m ready' : 'Everyone presses ' + input.label('a') + ' when ready', W / 2, 694, body(22, 500), INK)
+  if (early) {
     if (input.mode === 'touch' || input.mode === 'mouse') {
       panel(SAFETY_OK.x, SAFETY_OK.y - DY, SAFETY_OK.w, SAFETY_OK.h, 32, GOLD)
-      text('Start now', W / 2, SAFETY_OK.y - DY + SAFETY_OK.h / 2 + 1, body(26), '#0b1a36')
-    } else text(`${input.label('a')} to start now`, W / 2, 706, body(24), GOLD)
+      text(solo ? 'Start' : 'Start now', W / 2, SAFETY_OK.y - DY + SAFETY_OK.h / 2 + 1, body(26), '#0b1a36')
+    } else text(`${input.label('a')} to start${solo ? '' : ' now'}`, W / 2, solo ? 700 : 736, body(24), GOLD)
   }
   ctx.restore()
 }
@@ -1935,33 +2512,60 @@ function wrap(str, x, y, width, font, color, draw = text, lh = 28) {
   wrapLines(str, width, font).forEach((line, i) => draw(line, x, y + i * lh, font, color, 'left'))
 }
 
+/**
+ * The how-to (or what's blocking the shot), in a pill at the bottom middle: off the golfer and the
+ * ball, between the club card and the scores. Called inside drawHud's DY shift; it sits on the real
+ * bottom edge (above the touch buttons' row when there are touch buttons).
+ */
+/** The how-to: a card over the shot panel, right-aligned with it (drawn in the DY-shifted space). */
+function hintPill(main, sub = '') {
+  const rs = Math.min(ts(), 1.2)
+  const room = Math.min(W - 2 * 28, 760)
+  const mainFont = fitFont((px) => rubik(px, 800), 21 * rs, room - 36, main)
+  const subFont = fitFont((px) => rubik(px, 500), 16 * rs, room - 36, sub)
+  ctx.font = mainFont
+  let w = ctx.measureText(main).width
+  if (sub) {
+    ctx.font = subFont
+    w = Math.max(w, ctx.measureText(sub).width)
+  }
+  w += 36
+  const h = Math.round((sub ? 64 : 44) * rs)
+  const above = hud.clubCard ? hud.clubCard.y - 12 : H - 28
+  const y = above - h - DY
+  const x = W - 28 - w
+  hud.hintPill = { x, y: y + DY, h, w }
+  panel(x, y + 4, w, h, 18, 'rgba(5,14,33,0.3)')
+  panel(x, y, w, h, 18, 'rgba(15,33,71,0.88)')
+  if (sub) {
+    plain(main, x + 18, y + h / 2 - 11 * rs, mainFont, GOLD, 'left')
+    plain(sub, x + 18, y + h / 2 + 14 * rs, subFont, INK, 'left')
+  } else plain(main, x + 18, y + h / 2 + 1, mainFont, GOLD, 'left')
+}
+
 function drawAimHelp(s) {
   const touchUi = input.mode === 'touch' || input.mode === 'mouse'
+  const told = hint(hintKind(s))
   if (s.kind === 'phone') {
     const inp = party.inputs[s.id] ?? {}
     const st = inp.st
     const putting = isPutting()
-    const msg = !state.safe.has(s.id) ? 'Read the safety card on your phone first' : st === 'touch' ? 'Pull down on your phone’s pad, then flick up' : inp.a ? (putting ? 'Putt!' : 'Swing!') : putting ? 'Hold SET on your phone and putt' : 'Hold SET on your phone and swing'
-    text(msg, W / 2, 640, body(34), inp.a ? LIME : GOLD)
-    text(st === 'touch' ? 'No motion sensors on this phone: the pad swings for you' : st === 'on' ? (putting ? 'The backstroke sets how far it rolls: rock back, then stroke through' : 'Your backswing fills the bar; then swing through to deliver it') : st === 'ask' ? 'Tap "Allow motion" on your phone' : 'Waiting for the phone’s sensors…', W / 2, 690, body(22, 500), INK)
-    // The live swing: how far back, then the downswing.
-    if (inp.a) {
-      // The bar is the power the backswing has set; it holds through the downswing.
-      const sw = party.public.swing ?? {}
-      const down = inp.swp === 'down' || inp.swp === 'done'
-      const v = clamp((Number(down ? inp.bk : inp.sw) || 0) / (sw.backFull || 200), -0.2, 1)
-      panel(W / 2 - 210, 580, 420, 22, 11, 'rgba(11,26,54,0.8)')
-      panel(W / 2 - 210, 580, Math.max(22, 420 * Math.max(0, v)), 22, 11, inp.swp === 'down' ? PINK : GOLD)
-      // Putting with the help: the pace mark, as on the phone.
-      const mark = putting ? party.views?.[s.id]?.puttMark : null
-      if (mark) panel(W / 2 - 212 + 420 * Math.min(1, mark), 574, 5, 34, 2, INK)
+    // What blocks the shot is always said; how to swing only as a hint (hint()).
+    const blocked = !state.safe.has(s.id) ? 'Read the safety card on your phone first' : st === 'ask' ? 'Tap "Allow motion" on your phone' : st !== 'on' && st !== 'touch' ? 'Waiting for the phone’s sensors…' : ''
+    if (blocked) hintPill(blocked)
+    else if (told && !inp.a) {
+      hud.hint = true
+      hintPill(
+        st === 'touch' ? 'Pull down on your phone’s pad, then flick up' : putting ? 'Hold SET on your phone and putt' : 'Hold SET on your phone and swing',
+        st === 'touch' ? 'No motion sensors on this phone: the pad swings for you' : putting ? 'The backstroke sets how far it rolls' : 'Your backswing fills the bar; swing through to deliver it',
+      )
     }
-  } else if (state.phase === 'aim') {
-    if (touchUi) {
-      text(isPutting() ? 'Pull down on the green, then flick up to putt' : 'Pull down on the course, then flick up to swing', W / 2, 640, body(30), GOLD)
-      text(isPutting() ? 'A longer flick rolls it further' : 'Flick straight up for a straight shot', W / 2, 682, body(22, 500), INK)
-    } else if (isPutting()) text(`${input.label('a')} to putt · ${input.stickLabel()} to aim`, W / 2, 660, body(28), GOLD)
-    else text(`${input.label('a')} to swing · ${input.stickLabel()} to aim · ${input.dpadLabel()} ▲▼ club`, W / 2, 660, body(28), GOLD)
+    // The live swing fills the shot panel's power arc (clubCard).
+  } else if (state.phase === 'aim' && told) {
+    hud.hint = true
+    if (touchUi) hintPill(isPutting() ? 'Pull down on the green, then flick up to putt' : 'Pull down on the course, then flick up to swing', isPutting() ? 'A longer flick rolls it further' : 'Flick straight up for a straight shot')
+    else if (isPutting()) hintPill(`${input.label('a')} to putt · ${input.stickLabel()} to aim`)
+    else hintPill(`${input.label('a')} to swing · ${input.stickLabel()} to aim · ${input.dpadLabel()} ▲▼ club`)
   }
   if (touchUi && s.kind !== 'phone' && state.phase === 'aim') {
     ctx.save()
@@ -1996,18 +2600,21 @@ function drawAimHelp(s) {
 /** The classic three-press meter: up for power, back down to the line for a straight strike. */
 function drawMeter() {
   const m = state.meter
-  const x = W / 2 - 320
-  const y = 560
-  const w = 640
-  panel(x - 24, y - 64, w + 48, 150)
-  text(m.stage === 'power' ? `Power: ${input.label('a')} to set it` : `${input.label('a')} on the line to strike`, W / 2, y - 32, body(26), INK)
+  const x = W / 2 - 280
+  const y = 600
+  const w = 560
+  const told = hint(hintKind(seat()))
+  hud.hint ||= told
+  panel(x - 18, y - (told ? 52 : 18), w + 36, told ? 116 : 82, 18, 'rgba(11,26,54,0.55)')
+  if (told) text(m.stage === 'power' ? `Power: ${input.label('a')} to set it` : `${input.label('a')} on the line to strike`, W / 2, y - 26, body(22), INK)
   const max = TUNING.swing.maxPower
   const zero = x + w * 0.2 // the strike line; left of it is late (hook), right of it early
   const px = (v) => zero + (v / max) * (w * 0.8)
   panel(x, y, w, 40, 20, '#0b1a36')
   panel(px(1) - 3, y - 6, 6, 52, 3, 'rgba(255,255,255,0.4)')
   ctx.fillStyle = 'rgba(182,240,74,0.55)'
-  ctx.fillRect(zero - TUNING.meter.window * w * 0.8, y, TUNING.meter.window * 2 * w * 0.8, 40)
+  const win = lvl(seat()).meter.window // the level's sweet spot
+  ctx.fillRect(zero - win * w * 0.8, y, win * 2 * w * 0.8, 40)
   if (m.stage === 'accuracy') panel(zero, y, Math.max(0, px(m.power) - zero), 40, 20, 'rgba(255,210,63,0.45)')
   ctx.fillStyle = INK
   ctx.fillRect(zero - 2, y - 8, 4, 56)
@@ -2017,74 +2624,97 @@ function drawMeter() {
   // Putting: where the meter rolls it as far as the cup on a flat green.
   const s = seat()
   if (isPutting() && s?.ball && s.cup) {
-    // With the help: the power that rolls it in, slope and all. Without: the cup's distance on the flat.
-    const v = puttHelp() && s.plan ? s.plan.speed : null
-    const k = clamp(v ? (v * v) / (2 * PT.roll) / FT / PT.full : Math.hypot(s.cup.x - s.ball.x, s.cup.z - s.ball.z) / FT / PT.full, 0, max)
+    // The meter putts on the putt's own bar (puttRange): the cup is where its length falls on it,
+    // with the help the help's pace (slope and all), without it the straight distance.
+    const k = clamp(puttFlat(s) / puttRange(s), 0, max)
+    hud.meterCup = k
     panel(px(k) - 3, y - 6, 6, 52, 3, LIME)
     text('cup', px(k), y - 18, body(16, 500), LIME)
   }
 }
 
-/** After a putt: how it finished and the stroke. */
-function drawPuttReadout(sh) {
-  const i = sh.input
-  const x = W / 2 - 330
-  const y = 590 // low, so the ball and the cup stay in sight above it
-  const from = Math.round(Math.hypot(sh.cup.x - sh.from.x, sh.cup.z - sh.from.z) / FT)
-  panel(x, y, 660, 170)
-  text(sh.roll.holed ? 'In!' : sh.roll.lipped ? 'Lip out' : `${sh.how.left < 10 ? sh.how.left.toFixed(1) : Math.round(sh.how.left)}`, x + 110, y + 66, head(sh.roll.holed || sh.roll.lipped ? 60 : 80), sh.roll.holed ? GOLD : INK)
-  text(sh.roll.holed ? `from ${from} ft` : 'ft from the cup', x + 110, y + 122, body(22, 500), QUIET)
-  const face = Math.abs(i.face) < 0.3 ? 'square' : `${Math.abs(i.face).toFixed(1)}° ${i.face > 0 ? 'right' : 'left'}`
-  const rows = [
-    ['Putt', sh.roll.holed ? 'Holed' : sh.how.text],
-    ['From', `${from} ft`],
-    ['Stroke', i.how === 'phone' && i.raw ? `${i.raw.speed}°/s · ${i.raw.back}° back` : `${Math.round((i.power ?? 0) * 100)}% · ${{ meter: 'meter', flick: 'flick', pad: 'touch pad' }[i.how] ?? i.how}`],
-    ['Face', face],
-    ['Ball speed', `${(sh.speed / FT).toFixed(1)} ft/s`]
-  ]
-  rows.forEach(([k, v], n) => {
-    const ry = y + 30 + n * 28
-    text(k, x + 250, ry, body(20, 500), QUIET, 'left')
-    text(String(v), x + 630, ry, body(22), INK, 'right')
+/**
+ * A slim strip of numbers along the bottom, after a shot: [label, value] pairs. The banner has
+ * already said what happened; this is the detail, for those who want it.
+ */
+function statStrip(pairs, note = '') {
+  hud.readout = 'strip'
+  const y = 712
+  const rs = Math.min(ts(), 1.2)
+  const keyFont = rubik(16 * rs, 500)
+  const valFont = rubik(20 * rs)
+  const gap = 26
+  const widths = pairs.map(([k, v]) => {
+    ctx.font = keyFont
+    const kw = ctx.measureText(k).width
+    ctx.font = valFont
+    return kw + 8 + ctx.measureText(v).width
   })
-  if (i.lazy) text('Stroke through firmer: your backstroke had more in it', W / 2, y - 24, body(24), GOLD)
+  const total = widths.reduce((a, b) => a + b, 0) + gap * (pairs.length - 1)
+  const w = Math.min(W - 80, total + 44)
+  panel(W / 2 - w / 2, y - 22, w, 44, 22, 'rgba(11,26,54,0.62)')
+  let x = W / 2 - total / 2
+  pairs.forEach(([k, v], i) => {
+    text(k, x, y + 1, keyFont, QUIET, 'left')
+    ctx.font = keyFont
+    text(v, x + ctx.measureText(k).width + 8, y + 1, valFont, INK, 'left')
+    x += widths[i] + gap
+  })
+  if (note) text(note, W / 2, y - 46, rubik(20 * rs), GOLD)
 }
 
-/** After a shot: the numbers. */
+/** After a putt: how far it finished (the banner has the moments: in, lip out, gimme). */
+function drawPuttReadout(sh) {
+  const i = sh.input
+  const from = Math.round(Math.hypot(sh.cup.x - sh.from.x, sh.cup.z - sh.from.z) / FT)
+  const left = sh.how.left < 10 ? sh.how.left.toFixed(1) : `${Math.round(sh.how.left)}`
+  const pairs = sh.roll.holed ? [['Holed from', `${from} ft`]] : [['Left', `${left} ft`], ['', sh.how.text], ['From', `${from} ft`]]
+  // Practice: the stroke too.
+  if (state.mode === 'putting' && i.how === 'phone' && i.raw) pairs.push(['Stroke', `${i.raw.back}° back · ${i.raw.speed}°/s`])
+  statStrip(pairs.filter(([, v]) => v), i.lazy ? 'Stroke through firmer: your backstroke had more in it' : '')
+}
+
+/** After a shot: in practice, the numbers in one strip; elsewhere the banner says it all. */
 function drawReadout(sh) {
   const r = sh.result
   const i = sh.input
-  const x = W / 2 - 330
-  const y = 470
-  panel(x, y, 660, 200)
-  text(`${r.carry}`, x + 110, y + 70, head(80), GOLD)
-  text('yd carry', x + 110, y + 128, body(22, 500), QUIET)
-  text(`${r.total} yd total`, x + 110, y + 162, body(22), INK)
-  const off = Math.abs(r.offline) < 1 ? 'On line' : `${Math.abs(r.offline)} yd ${r.offline > 0 ? 'right' : 'left'}`
-  const face = Math.abs(i.face) < 0.5 ? 'square' : `${Math.round(Math.abs(i.face))}° ${i.face > 0 ? 'right' : 'left'}`
-  const rows = [
-    ['Shot', r.shape],
+  const note = i.lazy ? 'Swing through faster: your backswing had more in it' : ''
+  if (state.mode !== 'practice') {
+    if (note) text(note, W / 2, 690, rubik(20 * Math.min(ts(), 1.2)), GOLD)
+    return
+  }
+  // A phone player's numbers are on their phone: say so, once, small.
+  if (i.how === 'phone') {
+    hud.readout = 'phone'
+    const words = `Face, path, tempo and club speed are on ${sh.seat.name}'s phone`
+    const font = rubik(17 * Math.min(ts(), 1.2))
+    ctx.font = font
+    const w = ctx.measureText(words).width + 36
+    panel(W / 2 - w / 2, 708, w, 36, 18, 'rgba(11,26,54,0.6)')
+    plain(words, W / 2, 727, font, QUIET)
+    if (note) text(note, W / 2, 680, rubik(20 * Math.min(ts(), 1.2)), GOLD)
+    return
+  }
+  const off = Math.abs(r.offline) < 1 ? 'on line' : `${Math.abs(r.offline)} yd ${r.offline > 0 ? 'right' : 'left'}`
+  const face = Math.abs(i.face) < 0.5 ? 'square' : `${Math.round(Math.abs(i.face))}° ${i.face > 0 ? 'R' : 'L'}`
+  const pairs = [
+    ['Total', `${r.total} yd`],
     ['Offline', off],
     ['Power', `${Math.round(i.power * 100)}%${i.mph ? ` · ${i.mph} mph` : ''}`],
-    ['Face', face],
-    i.how === 'phone' ? ['Path', Math.abs(i.path) < 0.5 ? 'straight' : `${Math.round(Math.abs(i.path))}° ${i.path > 0 ? 'out to the right' : 'across to the left'}`] : ['Swing', { meter: 'meter', flick: 'flick', pad: 'touch pad' }[i.how] ?? i.how],
-    i.how === 'phone' && i.raw ? ['Tempo', `${i.raw.tempo}:1 · ${i.raw.back}° back`] : ['Apex', `${r.apex} yd high`]
+    ['Face', face]
   ]
-  rows.forEach(([k, v], n) => {
-    const ry = y + 30 + n * 28
-    text(k, x + 250, ry, body(20, 500), QUIET, 'left')
-    text(String(v), x + 630, ry, body(22), INK, 'right')
-  })
-  if (i.lazy) text('Swing through faster: your backswing had more in it', W / 2, y + 226, body(24), GOLD)
+  if (i.how === 'phone') pairs.push(['Path', Math.abs(i.path) < 0.5 ? 'straight' : `${Math.round(Math.abs(i.path))}° ${i.path > 0 ? 'out' : 'in'}`])
+  if (i.how === 'phone' && i.raw) pairs.push(['Tempo', `${i.raw.tempo}:1`])
+  statStrip(pairs, note)
 }
 
 /** Practice: a top-down map of where this session's balls stopped. */
 function drawMap() {
-  const x = W - 210
-  const y = 300
-  const w = 180
-  const h = 330
-  panel(x - 10, y - 10, w + 20, h + 20, 16)
+  const x = W - 172
+  const y = 310
+  const w = 140
+  const h = 260
+  panel(x - 10, y - 10, w + 20, h + 20, 16, 'rgba(11,26,54,0.5)')
   const maxZ = 280 * YD
   const sx = (gx) => x + w / 2 + (gx / (fairwayHalf(maxZ) * 1.6)) * (w / 2)
   const sy = (gz) => y + h - 10 - (gz / maxZ) * (h - 20)
@@ -2105,122 +2735,215 @@ function drawMap() {
   }
   for (const g of TUNING.targets.greens) dot(sx(g.side * YD), sy(g.yards * YD), 5, g.color)
   state.recent.forEach((p, i) => {
-    dot(sx(p.x), sy(p.z), i === state.recent.length - 1 ? 6 : 4, p.color)
+    // Kept inside the map: a ball far off to the side (in the sea) sits on its edge.
+    const px = clamp(sx(p.x), x + 6, x + w - 6)
+    const py = clamp(sy(p.z), y + 6, y + h - 6)
+    dot(px, py, i === state.recent.length - 1 ? 6 : 4, p.color)
     if (i === state.recent.length - 1) {
       ctx.strokeStyle = INK
       ctx.lineWidth = 2
       ctx.beginPath()
-      ctx.arc(sx(p.x), sy(p.z), 9, 0, Math.PI * 2)
+      ctx.arc(px, py, 9, 0, Math.PI * 2)
       ctx.stroke()
     }
   })
   dot(sx(0), sy(0), 5, INK)
 }
 
-/** The course: the hole from above, with the pin and everyone's ball. */
+/** The course: the hole from above, turned so it plays up the card, with the pin and everyone's ball. */
+const HOLE_MAP = { x: 0, y: 310, w: 140, h: 260, tints: { water: '#2f96d8', sand: '#f1dfa6', bunker: '#f1dfa6', fairway: '#7fd957', green: '#bdf794', fringe: '#9fe676', rough: '#4a9c3f', hill: '#37803a' } }
+const holeMaps = new Map()
+/** World → card for a hole: the tee near the bottom, the green near the top. */
+function holeMapView(H) {
+  const { w, h } = HOLE_MAP
+  const len = Math.hypot(H.green.x - H.tee.x, H.green.z - H.tee.z)
+  const u = { x: (H.green.x - H.tee.x) / len, z: (H.green.z - H.tee.z) / len }
+  const k = (h - 56) / len
+  return {
+    k,
+    to: (p) => ({ x: w / 2 + ((p.x - H.tee.x) * u.z - (p.z - H.tee.z) * u.x) * k, y: h - 22 - ((p.x - H.tee.x) * u.x + (p.z - H.tee.z) * u.z) * k }),
+    from: (mx, my) => {
+      const side = (mx - w / 2) / k
+      const along = (h - 22 - my) / k
+      return { x: H.tee.x + along * u.x + side * u.z, z: H.tee.z + along * u.z - side * u.x }
+    }
+  }
+}
+/** The ground of a hole's card, painted once: what lies where, in little squares. */
+function holeMapImage(i) {
+  if (holeMaps.has(i)) return holeMaps.get(i)
+  const { w, h, tints } = HOLE_MAP
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const g = c.getContext('2d')
+  const v = holeMapView(HOLES[i])
+  const cell = 2
+  for (let my = 0; my < h; my += cell) {
+    for (let mx = 0; mx < w; mx += cell) {
+      const p = v.from(mx + cell / 2, my + cell / 2)
+      g.fillStyle = tints[lieAt(p.x, p.z)] ?? tints.rough
+      g.fillRect(mx, my, cell, cell)
+    }
+  }
+  holeMaps.set(i, c)
+  return c
+}
 function drawHoleMap(s) {
-  const x = W - 210
-  const y = 300
-  const w = 180
-  const h = 330
-  panel(x - 10, y - 10, w + 20, h + 20, 16)
-  const G = HOLE.green
-  const top = G.z + G.rz * 1.6
-  const half = 70
-  const sx = (gx) => x + w / 2 + (gx / half) * (w / 2)
-  const sy = (gz) => y + h - 14 - (gz / top) * (h - 28)
-  // The fairway fan, the green, the tee.
-  ctx.fillStyle = 'rgba(95,207,74,0.35)'
+  const { y, w, h } = HOLE_MAP
+  const x = W - 172
+  const { tee, cup, name } = hole()
+  const v = holeMapView(hole())
+  const at = (p) => {
+    const m = v.to(p)
+    return { x: x + clamp(m.x, 6, w - 6), y: y + clamp(m.y, 6, h - 6) }
+  }
+  panel(x - 10, y - 10, w + 20, h + 20, 16, 'rgba(11,26,54,0.6)')
+  ctx.save()
   ctx.beginPath()
-  ctx.moveTo(sx(-fairwayHalf(0)), sy(0))
-  ctx.lineTo(sx(-Math.min(half, fairwayHalf(top))), sy(top))
-  ctx.lineTo(sx(Math.min(half, fairwayHalf(top))), sy(top))
-  ctx.lineTo(sx(fairwayHalf(0)), sy(0))
-  ctx.fill()
-  ctx.fillStyle = 'rgba(134,224,92,0.9)'
-  ctx.beginPath()
-  ctx.ellipse(sx(G.x), sy(G.z), (G.rx / half) * (w / 2), (G.rz / top) * (h - 28), 0, 0, Math.PI * 2)
-  ctx.fill()
-  dot(sx(HOLE.tee.x), sy(HOLE.tee.z), 5, INK)
+  ctx.roundRect(x, y, w, h, 10)
+  ctx.clip()
+  ctx.globalAlpha = 0.92
+  ctx.drawImage(holeMapImage(state.hole), x, y)
+  ctx.restore()
+  dot(at(tee).x, at(tee).y, 5, INK)
   // The pin.
+  const pin = at(cup)
   ctx.strokeStyle = INK
   ctx.lineWidth = 2
   ctx.beginPath()
-  ctx.moveTo(sx(HOLE.cup.x), sy(HOLE.cup.z))
-  ctx.lineTo(sx(HOLE.cup.x), sy(HOLE.cup.z) - 16)
+  ctx.moveTo(pin.x, pin.y)
+  ctx.lineTo(pin.x, pin.y - 16)
   ctx.stroke()
   ctx.fillStyle = PINK
   ctx.beginPath()
-  ctx.moveTo(sx(HOLE.cup.x), sy(HOLE.cup.z) - 16)
-  ctx.lineTo(sx(HOLE.cup.x) + 10, sy(HOLE.cup.z) - 12)
-  ctx.lineTo(sx(HOLE.cup.x), sy(HOLE.cup.z) - 8)
+  ctx.moveTo(pin.x, pin.y - 16)
+  ctx.lineTo(pin.x + 10, pin.y - 12)
+  ctx.lineTo(pin.x, pin.y - 8)
   ctx.fill()
   // Everyone's ball (the one up ringed).
   for (const o of state.seats) {
     if (!o.ball || o.done) continue
-    dot(sx(clamp(o.ball.x, -half, half)), sy(clamp(o.ball.z, 0, top)), o === s ? 6 : 5, o.color)
+    const b = at(o.ball)
+    ctx.strokeStyle = '#0b1a36'
+    ctx.lineWidth = 2
+    dot(b.x, b.y, o === s ? 6 : 5, o.color)
+    ctx.stroke()
     if (o === s) {
+      ctx.strokeStyle = INK
       ctx.beginPath()
-      ctx.arc(sx(clamp(o.ball.x, -half, half)), sy(clamp(o.ball.z, 0, top)), 10, 0, Math.PI * 2)
+      ctx.arc(b.x, b.y, 10, 0, Math.PI * 2)
       ctx.stroke()
     }
   }
-  text(`${HOLE.name}`, x + w / 2, y + 6, fitFont(rubik, 16, w - 10, HOLE.name), QUIET)
+  text(name, x + w / 2, y + 12, fitFont(rubik, 16, w - 10, name), INK)
 }
 
+/** Where the results card, its rows and its buttons sit for n players: one card, centred. */
+function resultsLayout(n) {
+  const rowsH = n * 78 - 10
+  const menuH = overMenu.items.length * 72 - 12
+  const h = 122 + rowsH + 28 + menuH + 30
+  const top = Math.round((MIN_H - h) / 2) + DY
+  return { top, h, rows: top + 122, menu: top + 122 + rowsH + 28 }
+}
+
+/** A rounded label: dark words on a bright pill. Returns its width. Drawn leftward from x with align 'right'. */
+function pill(str, x, cy, font, fill, align = 'left') {
+  ctx.font = font
+  const w = Math.ceil(ctx.measureText(str).width) + 24
+  const left = align === 'right' ? x - w : x
+  panel(left, cy - 15, w, 30, 15, fill)
+  plain(str, left + w / 2, cy + 1, font, '#0b1a36')
+  return w
+}
+
+/** The results: a navy scorecard in the clubhouse rail's style, with the rail's tiles as its buttons. */
 function drawResults() {
-  veil(0.6)
-  ctx.save()
-  ctx.translate(0, DY)
+  veil(0.55)
+  // One row per player, whatever was played.
+  let kicker = 'Final scores'
+  let title
+  let rows
+  const seat = (r) => state.seats.find((x) => x.id === r.id)
   if (isCourse()) {
-    text(`${HOLE.name} · par ${HOLE.par}`, W / 2, 90, fitFont(lilita, 64 * ts(), W - 120, `${HOLE.name} · par ${HOLE.par}`), GOLD)
-    courseStandings(state.seats).forEach((r, i) => {
-      const s = state.seats.find((x) => x.id === r.id)
-      const y = 170 + i * 80
-      panel(W / 2 - 330, y, 660, 66, 16, i === 0 ? 'rgba(11,26,54,0.92)' : PANEL)
-      text(`${i + 1}`, W / 2 - 290, y + 34, head(40), i === 0 ? GOLD : INK)
-      dot(W / 2 - 240, y + 33, 12, s.color)
-      text(s.name, W / 2 - 215, y + 34, body(28), INK, 'left')
-      text(s.done ? scoreName(s.strokes) : 'Still out', W / 2 + 160, y + 34, body(22, 600), s.strokes <= HOLE.par ? LIME : QUIET, 'right')
-      text(`${r.total}`, W / 2 + 300, y + 34, head(40), i === 0 ? GOLD : INK, 'right')
-      if (s.newBest) text('New best!', W / 2 + 300, y + 76, body(18), TEAL, 'right')
+    kicker = `Round over · ${HOLES.length} holes · par ${COURSE.par}`
+    title = `${COURSE.name} course`
+    rows = courseStandings(state.seats).map((r) => {
+      const s = seat(r)
+      return { s, total: r.total, detail: toPar(r.total), good: r.total <= COURSE.par }
     })
-    ctx.restore()
-    overMenu.draw(ctx, fitFont(rubik, 28 * ts(), 380, ...overMenu.items.map((it) => it.label)))
-    return
-  }
-  text(isPutts() ? 'Putting challenge' : 'Target challenge', W / 2, 90, head(64), GOLD)
-  if (isPutts()) {
-    puttStandings(state.seats).forEach((r, i) => {
-      const s = state.seats.find((x) => x.id === r.id)
-      const y = 170 + i * 80
-      panel(W / 2 - 330, y, 660, 66, 16, i === 0 ? 'rgba(11,26,54,0.92)' : PANEL)
-      text(`${i + 1}`, W / 2 - 290, y + 34, head(40), i === 0 ? GOLD : INK)
-      dot(W / 2 - 240, y + 33, 12, s.color)
-      text(s.name, W / 2 - 215, y + 34, body(28), INK, 'left')
+  } else if (isPutts()) {
+    title = 'Putting challenge'
+    rows = puttStandings(state.seats).map((r) => {
+      const s = seat(r)
       const ones = s.card.filter((x) => x === 1).length
-      text(`${ones} one-putt${ones === 1 ? '' : 's'}`, W / 2 + 120, y + 34, body(20, 500), QUIET, 'right')
-      text(`${r.total}`, W / 2 + 300, y + 34, head(40), i === 0 ? GOLD : INK, 'right')
-      if (s.newBest) text('New best!', W / 2 + 300, y + 76, body(18), TEAL, 'right')
+      return { s, total: r.total, detail: `${ones} one-putt${ones === 1 ? '' : 's'}` }
     })
-    ctx.restore()
-    overMenu.draw(ctx, fitFont(rubik, 28 * ts(), 380, ...overMenu.items.map((it) => it.label)))
-    return
+  } else {
+    title = 'Target challenge'
+    rows = standings(state.seats).map((r) => {
+      const s = seat(r)
+      return { s, total: r.total, detail: `${s.shots.filter((x) => x.points).length}/${s.shots.length} on target` }
+    })
   }
-  standings(state.seats).forEach((r, i) => {
-    const s = state.seats.find((x) => x.id === r.id)
-    const y = 170 + i * 80
-    panel(W / 2 - 330, y, 660, 66, 16, i === 0 ? 'rgba(11,26,54,0.92)' : PANEL)
-    text(`${i + 1}`, W / 2 - 290, y + 34, head(40), i === 0 ? GOLD : INK)
-    dot(W / 2 - 240, y + 33, 12, s.color)
-    text(s.name, W / 2 - 215, y + 34, body(28), INK, 'left')
-    const hits = s.shots.filter((x) => x.points).length
-    text(`${hits}/${s.shots.length} on target`, W / 2 + 120, y + 34, body(20, 500), QUIET, 'right')
-    text(`${r.total}`, W / 2 + 300, y + 34, head(40), i === 0 ? GOLD : INK, 'right')
-    if (s.newBest) text('New best!', W / 2 + 300, y + 76, body(18), TEAL, 'right')
-  })
+  const L = resultsLayout(rows.length)
+  overMenu.place({ x: W / 2, y: L.menu })
+  const cw = 760
+  const x = W / 2 - 340
+  panel(W / 2 - cw / 2, L.top, cw, L.h, RAIL.radius, 'rgba(11,26,54,0.95)')
+  ctx.save()
+  ctx.letterSpacing = '3px'
+  plain(kicker.toUpperCase(), W / 2, L.top + 36, fitFont(rubik, 15 * Math.min(ts(), 1.2), cw - 80, kicker.toUpperCase()), QUIET)
   ctx.restore()
-  overMenu.draw(ctx, fitFont(rubik, 28 * ts(), 380, ...overMenu.items.map((it) => it.label)))
+  plain(title, W / 2, L.top + 80, fitFont(lilita, 50 * Math.min(ts(), 1.2), cw - 80, title), GOLD)
+  const rs = Math.min(ts(), 1.2)
+  rows.forEach((r, i) => {
+    const y = L.rows + i * 78
+    const cy = y + 35
+    const first = i === 0 && rows.length > 1
+    panel(x, y, 680, 68, 20, '#16305a')
+    if (first) {
+      ctx.strokeStyle = GOLD
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.roundRect(x + 1.5, y + 1.5, 677, 65, 19)
+      ctx.stroke()
+    }
+    plain(`${i + 1}`, x + 38, cy + 1, lilita(34), i === 0 ? GOLD : QUIET)
+    dot(x + 84, cy, 15, '#fff8ec')
+    dot(x + 84, cy, 12, r.s.color)
+    // From the right: the score, then what it was called; the name gets the room that's left.
+    plain(`${r.total}`, x + 652, cy + 2, lilita(42), i === 0 ? GOLD : INK, 'right')
+    ctx.font = lilita(42)
+    let right = x + 652 - Math.max(46, ctx.measureText(`${r.total}`).width) - 18
+    const detailFont = rubik(17 * rs)
+    if (r.good) right -= pill(r.detail, right, cy, detailFont, LIME, 'right') + 12
+    else {
+      plain(r.detail, right, cy + 1, detailFont, QUIET, 'right')
+      ctx.font = detailFont
+      right -= ctx.measureText(r.detail).width + 14
+    }
+    const bestFont = rubik(14 * rs)
+    ctx.font = bestFont
+    const bestW = r.s.newBest ? ctx.measureText('New best!').width + 24 + 12 : 0
+    const tagW = levelTag(r.s, 0, 0, 15, { draw: false })
+    const nameFont = fitFont(rubik, 26 * rs, right - (x + 110) - bestW - (tagW ? tagW + 12 : 0), r.s.name)
+    plain(r.s.name, x + 110, cy + 1, nameFont, INK, 'left')
+    ctx.font = nameFont
+    let after = x + 110 + ctx.measureText(r.s.name).width + 12
+    // The player's level (Easy / Pro), then a new best.
+    if (tagW) after += levelTag(r.s, after, cy, 15) + 10
+    if (r.s.newBest) pill('New best!', after, cy, bestFont, TEAL)
+  })
+  // The buttons: menu.js handles the input; these are the rail's tiles, gold when selected.
+  overMenu.items.forEach((it, i) => {
+    const r = overMenu.rect(i)
+    const on = it === overMenu.selected
+    if (on) panel(r.x, r.y + 6, r.w, r.h, 20, '#c99a12')
+    panel(r.x, r.y, r.w, r.h, 20, on ? GOLD : '#16305a')
+    plain(it.label, r.x + r.w / 2, r.y + r.h / 2 + 1, fitFont(rubik, 23 * rs, r.w - 40, it.label), on ? '#0b1a36' : INK)
+  })
 }
 
 function drawDebug() {

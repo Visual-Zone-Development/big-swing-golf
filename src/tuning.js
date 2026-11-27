@@ -47,9 +47,50 @@ export const OUTFITS = {
 }
 
 export const TUNING = {
+  /**
+   * Difficulty, picked by each player (levels.js). Each level names the swing's power and
+   * straight-shot help (keys into swing.backFull / swing.full / swing.assist), whether the game
+   * reads putts for you, and overrides for the meter, the cup and the gimme. Normal changes
+   * nothing: it plays exactly as the game did before there were levels. The course, the drawn cup
+   * and the target rings are the same at every level.
+   */
+  levels: {
+    easy: {
+      label: 'Easy',
+      sub: 'Gentle swings go far, shots fly straighter, the cup pulls putts in',
+      icon: '🐣',
+      strength: 'easy',
+      assist: 'lots',
+      read: true,
+      meter: { rise: 1.4, fall: 1.2, window: 0.09 },
+      cup: { catch: 2.8, lipEdge: 0.7, pull: { r: 0.7, speed: 1.4, acc: 2.2 } },
+      gimme: 5
+    },
+    normal: {
+      label: 'Normal',
+      sub: 'Some help straightening shots and reading putts',
+      icon: '⛳',
+      strength: 'normal',
+      assist: 'some',
+      read: true,
+      meter: {}, // no overrides: Normal is TUNING.meter, TUNING.putting and its gimme as they are
+      cup: {}
+    },
+    pro: {
+      label: 'Pro',
+      sub: 'Swing hard and square, read the greens yourself',
+      icon: '🏆',
+      strength: 'strong',
+      assist: 'off',
+      read: false,
+      meter: { rise: 0.9, fall: 0.75, window: 0.04 },
+      cup: { catch: 1.8, lipEdge: 0.4, pull: { r: 0, speed: 0, acc: 0 } }, // no pull: a ball dying by the rim stays out
+      gimme: 0
+    }
+  },
   swing: {
     // Phone: the backswing sets the power (what the phone's bar shows): this far back (deg) is a
-    // full swing, by the "Swing power needed" setting. The downswing then has to commit: reach
+    // full swing, by the player's level (its `strength`). The downswing then has to commit: reach
     // `commit` of full club speed (deg/s at impact, `full`) for that power, or the shot is softer.
     backFull: { easy: 160, normal: 200, strong: 240 },
     full: { easy: 750, normal: 1050, strong: 1400 },
@@ -60,7 +101,7 @@ export const TUNING = {
     overswingWild: 2.5, // …and this much more face error per unit over full
     mphPerDps: 0.085, // club speed shown on screen (1050 deg/s ≈ 89 mph)
     deadzone: 1.5, // face and path errors under this (deg) count as square
-    assist: { off: 1, some: 0.6, lots: 0.35 }, // "Straight shot help" scales face and path
+    assist: { off: 1, some: 0.6, lots: 0.35 }, // the level's straight-shot help scales face and path
     pathWeight: 0.6, // how much the swing path counts (it relies on the hold; the face doesn't)
     maxFace: 25,
     maxPath: 15,
@@ -78,6 +119,9 @@ export const TUNING = {
     roughBounce: 0.2,
     hopMin: 0.8, // m/s up after a bounce: slower than this and it's rolling
     roughRoll: 3.2, // extra rolling drag in the rough (m/s²)
+    sandKeep: 0.12, // share of its pace a ball keeps landing in sand: it plugs
+    sandRoll: 30, // rolling drag in sand (m/s²): it stops almost dead
+    sandCarry: 0.67, // a shot out of sand goes this share as far, except with the sand wedge
     rollEase: 0.4, // rolling drag falls to this share of itself…
     rollEaseBelow: 4, // …as it slows from this speed (m/s) to a stop: it trickles out
     stopSpeed: 0.08,
@@ -133,7 +177,7 @@ export const TUNING = {
     pull: { r: 0.45, speed: 1.1, acc: 1.6 }, // near the cup and slow: drawn in (m, m/s, m/s² at the rim)
     planPast: 0.35, // the help's ideal pace: rolls this far (m) past the cup
     // The stroke (puttStroke): the bar is scaled to each putt. A full backstroke (`backFull` degrees,
-    // scaled by "Swing power needed") rolls `range` × the putt (its flat-green length, at the help's
+    // scaled by the level's swing power) rolls `range` × the putt (its flat-green length, at the help's
     // pace when the help is on), in proportion: halfway back is the cup, for a 3-footer or a 30-footer.
     // The through-stroke has to reach `commit` of the club speed that delivers it (mpsPerDps m/s per °/s).
     // Anything else (meter, flick, pad): power 1 is a full bar. `full` ft is the bar with no putt to scale to.
@@ -149,7 +193,7 @@ export const TUNING = {
     faceShare: 0.9, // the ball starts where the face points, nearly all of it
     aimMax: 25, // degrees either side of the line to the cup
     aimSpeed: 6, // degrees per second while held
-    gimme: 3, // Putting challenge: a ball this close (ft) counts as in, one more putt
+    gimme: 3, // Putting challenge: a ball this close (ft) counts as in, one more putt (each level sets its own)
     maxPutts: 4, // after this many it's picked up, scoring one more
     holes: 9,
     rollSpeed: 1.5, // the ball rolls this much faster than real time

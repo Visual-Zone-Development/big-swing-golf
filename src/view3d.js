@@ -13,6 +13,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
 import { TUNING, YD } from './tuning.js'
 import { makeBean, makeModelBean } from './characters.js'
 import { addProps, createScenery } from './scenery.js'
+import { clothMaterial, pennantGeometry } from './cloth.js'
 import { loadBeans } from './beans/beans.js'
 import { GREEN, puttHeight } from './putting.js'
 import { groundHeight } from './terrain.js'
@@ -24,16 +25,19 @@ const H = 800
 const toV = (p, v = new THREE.Vector3()) => v.set(p.x, p.y, -p.z)
 const WHITE = new THREE.Color('#ffffff')
 
-export function createView(canvas, { width = W, height = H, preserve = false, full = false, beans = './beans/', props = './resort/', graphics: graphicsSetting = 'auto' } = {}) {
-  let graphics = graphicsSetting
+export function createView(canvas, { width = W, height = H, preserve = false, full = false, beans = './beans/', props = './resort/' } = {}) {
   // No GPU (a software renderer): skip anti-aliasing, which multiplies every pixel's cost there.
   // full: always full detail, however slow (the art preview renders a single frame).
   const software = !full && softwareGpu()
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: !software, powerPreference: 'high-performance', preserveDrawingBuffer: preserve })
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1))
   // The view's size follows the screen's shape (fitCanvas fill): resize() keeps it in step.
   let vw = width
   let vh = height
+  // High draws at the screen's own resolution (setSharpness: CSS scale × device pixels), so a
+  // 1080p or 4K TV isn't looking at a stretched 1422×800 picture; capped at 2560 pixels across.
+  let sharp = 1
+  const fullRatio = () => Math.max(1, Math.min(sharp, 2560 / vw))
+  renderer.setPixelRatio(1)
   renderer.setSize(vw, vh, false)
   renderer.toneMapping = THREE.ACESFilmicToneMapping
   renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -45,27 +49,30 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
 
   // ---- light ----------------------------------------------------------------------------------
   // lighting.js: sky light, sun with shadows that follow the action, fill, rim, and (High) the
-  // finishing stack. graphics: 'auto' (High on a GPU, Low on a software renderer or slow frames),
-  // 'high' or 'low' (the Graphics setting).
-  const lighting = createLighting(renderer, scene, { low: software || graphics === 'low' })
+  // finishing stack. Low on a software renderer until the Graphics setting says otherwise.
+  const lighting = createLighting(renderer, scene, { low: software })
 
   // ---- quality -----------------------------------------------------------------------------------
-  // Full detail on a real GPU (the Deck included). A software renderer (no GPU, like a build
-  // server) or frames that keep coming slower than 30 a second switch to light mode: half the
-  // pixels, no shadows, fewer small things. Once light, it stays light.
+  // Graphics High (the default on a real GPU, the Deck included): full detail at the screen's
+  // resolution, and it stays that way however slow the frames. Low (the default with no GPU,
+  // like a build server, or picked in Settings) is light mode: half the pixels, no shadows,
+  // fewer small things, the hand-built beans.
   let light = false
   const golfers = new Map() // look id → makeBean() / makeModelBean()
   const blobGeo = new THREE.CircleGeometry(0.55, 24).rotateX(-Math.PI / 2)
   const blobMat = new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false, opacity: 0.5, color: '#203018' })
   let kit = null // the shared bean kit, once loaded (see below)
   const forceModels = typeof location !== 'undefined' && new URLSearchParams(location.search).has('models')
-  let slowFor = 0
-  let lastDraw = 0
+  /** Light mode draws half the pixels; High, the screen's own (fullRatio). */
+  const applyRatio = () => {
+    renderer.setPixelRatio(light ? 0.5 : fullRatio())
+    renderer.setSize(vw, vh, false)
+    lighting.resize(vw, vh)
+  }
   const goLight = () => {
     if (light) return
     light = true
-    renderer.setPixelRatio(0.5)
-    renderer.setSize(vw, vh, false)
+    applyRatio()
     lighting.setLow(true)
     scenery?.setLight(true)
     // Back to the hand-built beans (rebuilt on the next frame).
@@ -165,9 +172,15 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
   const hole = new THREE.Mesh(new THREE.CircleGeometry(cupR, 28).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#10240c', polygonOffset: true, polygonOffsetFactor: -2 }))
   const liner = new THREE.Mesh(new THREE.RingGeometry(cupR, cupR + 0.025, 28).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#ffffff', polygonOffset: true, polygonOffsetFactor: -2 }))
   const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 2.3, 8, 6).translate(0, 1.15, 0), new THREE.MeshLambertMaterial({ color: '#fff8ec' }))
-  const pin = new THREE.Mesh(new THREE.ShapeGeometry(pennant(), 4), new THREE.MeshLambertMaterial({ color: '#ff5c8a', side: THREE.DoubleSide }))
+  const pin = new THREE.Mesh(pennantGeometry(0.55, 0.34, 8, 3), clothMaterial({ color: '#ff5c8a' }, 0.55))
   pin.position.y = 2.25
-  cup.add(hole, liner, stick, pin)
+  // The hole and its liner lie on the green's slope (the stick stays upright): laid flat, the
+  // uphill half of the hole sank into a sloping green.
+  const lip = new THREE.Group()
+  lip.add(hole, liner)
+  const UP = new THREE.Vector3(0, 1, 0)
+  const slope = new THREE.Vector3()
+  cup.add(lip, stick, pin)
   cup.visible = false
   scene.add(cup)
   const others = new THREE.InstancedMesh(new THREE.SphereGeometry(TUNING.ball.radius, 14, 10), new THREE.MeshStandardMaterial({ roughness: 0.3 }), 4)
@@ -229,6 +242,7 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
    * o.flag: on the course, the pin to show from anywhere ({ cup: {x, z}, green })
    * o.targets: false hides the range's target greens (the course)
    * o.aim: degrees; o.ball: {x,y,z} | null; o.trail: points so far; o.ground: ground height under the ball
+   * o.club: the club in the golfer's hands (a CLUBS id; the putter on the green);
    * o.golfer: the look ({ id, color, outfit }) at the tee; o.waiting: the looks waiting beside it;
    * o.face: the golfer's expression (characters.js FACES); o.swing: the golfer's
    * pose (degrees: + back, - through); o.hand; o.lit: the green that was hit; o.land: where it landed; o.dt
@@ -236,13 +250,6 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
   let lastMode = ''
   function draw(o) {
     clock += o.dt
-    const now = performance.now()
-    const real = lastDraw ? (now - lastDraw) / 1000 : 0
-    lastDraw = now
-    if (real > 0 && real < 2 && o.mode !== 'fixed') {
-      slowFor = real > 1 / 30 ? slowFor + real : Math.max(0, slowFor - real * 0.5)
-      if (slowFor > 1.5 && !full && graphics !== 'high') goLight()
-    }
     const aimRad = ((o.aim ?? 0) * Math.PI) / 180
     const sin = Math.sin(aimRad)
     const cos = Math.cos(aimRad)
@@ -263,7 +270,11 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
     puttAim.visible = Boolean(P) && o.mode === 'putt'
     others.count = 0
     if (flag) {
-      cup.position.set(flag.x, ph(flag.x, flag.z) + 0.004, -flag.z)
+      cup.position.set(flag.x, ph(flag.x, flag.z) + 0.006, -flag.z)
+      // The ground's normal at the cup (the view's z is the game's −z).
+      const e = 0.12
+      slope.set(-(ph(flag.x + e, flag.z) - ph(flag.x - e, flag.z)) / (2 * e), 1, (ph(flag.x, flag.z + e) - ph(flag.x, flag.z - e)) / (2 * e)).normalize()
+      lip.quaternion.setFromUnitVectors(UP, slope)
       pin.rotation.y = Math.sin(clock * 1.8) * 0.25
       // From far down the fairway the flag is drawn bigger, so it can be seen on a TV.
       const far = Math.hypot(cam.pos.x - flag.x, cam.pos.z + flag.z)
@@ -322,7 +333,7 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
       const g = golfer(o.golfer)
       g.root.visible = true
       if (P) g.pose({ swing: o.swing ?? 0, aim: P.dir, hand: o.hand ?? 'R', dt: o.dt, face: o.face, gaze: watch, putt: true, base: { x: P.from.x, y: ph(P.from.x, P.from.z), z: -P.from.z } })
-      else g.pose({ swing: o.swing ?? 0, aim: aimRad, hand: o.hand ?? 'R', dt: o.dt, face: o.face, gaze: watch, base: o.tee ? { x: tee.x, y: teeY, z: -tee.z } : undefined })
+      else g.pose({ swing: o.swing ?? 0, aim: aimRad, hand: o.hand ?? 'R', club: o.club, dt: o.dt, face: o.face, gaze: watch, base: o.tee ? { x: tee.x, y: teeY, z: -tee.z } : undefined })
     }
     ;(o.waiting ?? []).slice(0, WAIT.length).forEach((def, i) => {
       const g = golfer(def)
@@ -341,7 +352,7 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
         g.pose({ at: { x, y: groundHeight(x, z), z: -z, face: -1.2 - d }, dt: o.dt, face: def.face ?? 'idle', gaze: o.ball ? watch : null })
       } else g.pose({ at: { x: WAIT[i].x, z: WAIT[i].z, face: -1.2 }, dt: o.dt, face: def.face ?? 'idle', gaze: o.ball ? watch : null })
     })
-    scenery.update(o.dt, o.lit ?? -1)
+    scenery.update(o.dt, o.lit ?? -1, camera.position)
     // Ball
     const b = o.ball ?? { x: tee.x, y: teeY + 0.13, z: tee.z }
     toV(b, ball.position)
@@ -503,22 +514,26 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
       if (w === vw && h === vh) return
       vw = w
       vh = h
-      renderer.setSize(vw, vh, false)
+      applyRatio()
       camera.aspect = vw / vh
       camera.updateProjectionMatrix()
       trailMat.resolution.set(vw, vh)
-      lighting.resize(vw, vh)
     },
-    /** The Graphics setting: 'auto' | 'high' | 'low'. Low is light mode; High and Auto start full. */
+    /** No GPU (a software renderer): the Graphics setting starts on Low here. */
+    software,
+    /** Screen pixels per game unit (the canvas's CSS scale × device pixels): High draws that many. */
+    setSharpness(k) {
+      if (Math.abs(k - sharp) < 0.01) return
+      sharp = k
+      applyRatio()
+    },
+    /** The Graphics setting: 'high' (full detail) | 'low' (light mode). */
     setGraphics(g) {
-      graphics = g
       if (g === 'low') goLight()
-      else if (light && (g === 'high' || !software)) {
+      else if (light) {
         // Back up to full detail (a reload of the light mode's choices).
         light = false
-        slowFor = 0
-        renderer.setPixelRatio(Math.min(devicePixelRatio, 1))
-        renderer.setSize(vw, vh, false)
+        applyRatio()
         lighting.setLow(false)
         scenery?.setLight(false)
       }
@@ -550,6 +565,14 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
       golfer(def).react(kind)
     },
     /** What a look's bean is wearing and its face now (tests, debug). */
+    /** A sculpted golfer's arms on the grip: [{ elbow: degrees bent, grow }] (null otherwise). */
+    armsOf(id) {
+      return golfers.get(id)?.arms ?? null
+    },
+    /** The club a golfer is holding (a CLUBS id or 'putter'), or null before they're drawn. */
+    clubOf(id) {
+      return golfers.get(id)?.club ?? null
+    },
     lookOf(id) {
       return golfers.get(id)?.look ?? null
     },
@@ -588,6 +611,18 @@ export function createView(canvas, { width = W, height = H, preserve = false, fu
         conf.push({ p: new THREE.Vector3(p.x, (p.y ?? 0) + 0.5, -p.z), vx: Math.cos(a) * s, vy: 6 + Math.random() * 9, vz: Math.sin(a) * s, life: 2 + Math.random(), floor: (p.y ?? 0) + 0.05, spin: 2 + Math.random() * 6, color: colors[i % colors.length] })
       }
     },
+    /** Screen position of a golfer's head (a look's id), for the name tag over them; null when not drawn. */
+    headOf(id, up = 1.55) {
+      const g = golfers.get(id)
+      if (!g?.root.visible) return null
+      const r = g.root.position
+      return this.project({ x: r.x, y: r.y + up, z: -r.z })
+    },
+    /** Screen position of the top of the flagstick (scaled up from afar), or null when there's no flag. */
+    flagTop() {
+      if (!cup.visible) return null
+      return this.project({ x: cup.position.x, y: cup.position.y + 2.45 * stick.scale.y, z: -cup.position.z })
+    },
     /** Screen position (1280×800) of a game-space point, or null when behind the camera. */
     project(p) {
       toV(p, tmp).project(camera)
@@ -612,15 +647,6 @@ const puttWait = (G, i) => ({ x: G.x - G.rx * 1.25 - (i % 2) * 1.2, z: -(G.z - 3
 /** A putt's ball and line: the ball's spot and the aim's sine and cosine. */
 function puttFrame(P, b) {
   return { bx: b.x, by: b.y ?? 0, bz: b.z, s: Math.sin(P.dir), c: Math.cos(P.dir) }
-}
-
-/** The flagstick's little pennant. */
-function pennant() {
-  const tri = new THREE.Shape()
-  tri.moveTo(0, 0)
-  tri.lineTo(0.55, -0.16)
-  tri.lineTo(0, -0.34)
-  return tri
 }
 
 /** A software renderer (SwiftShader, llvmpipe): there's no GPU, so every pixel costs. */

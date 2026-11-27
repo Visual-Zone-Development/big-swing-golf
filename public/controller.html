@@ -9,10 +9,12 @@
          the moment the club comes back through the ball. Letting go of SET first cancels.
          No sensors (plain http, a desktop browser, permission denied): a touch pad, pull down
          and flick up. Held input (party.inputs[id]): { st, a: SET held, sw: swing angle, ax: aim
-         -1/0/1, still, ph }. It shows which Shape crew golfer you are (mine.golfer), and a safety
-         card before your first swing of a party (until mine.safe; "I'm ready" sends { safe }), and
+         -1/0/1, still, ph }. It shows which Shape crew golfer you are (mine.golfer), the Line-up
+         before every game (public.phase 'lineup': your level, outfit and swing, everyone else's
+         picks from public.lineup, the safety tips on a party's first game; "I'm ready" sends
+         { ready, safe }), and
          whatever menu the TV has open (public.menu) as buttons, sent back as { menu }. Messages: { club: i }, { shot }, { flick: { power, face } },
-         { pause } / { resume } / { again }, { pong, pt }. One file, everything inline. -->
+         { pause } / { resume } / { again }, { level }, { outfit }, { hand }, { pong, pt }. One file, everything inline. -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <style>
       * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -57,13 +59,19 @@
       .row button { flex: 1; }
       .pause { background: #bcd0f2; }
       #again { background: #ffd23f; font-size: 24px; }
-      #safety { position: absolute; inset: 0; z-index: 5; background: #16305a; display: flex; flex-direction: column; gap: 14px; padding: 22px 18px calc(22px + env(safe-area-inset-bottom, 0px)); overflow-y: auto; }
-      #safety h1 { font-size: 30px; color: #ffd23f; }
-      #safety .tip { display: flex; gap: 14px; align-items: flex-start; background: #24467d; border-radius: 18px; padding: 14px 16px; }
-      #safety .tip b { display: block; font-size: 20px; margin-bottom: 2px; }
-      #safety .tip span { color: #bcd0f2; font-weight: 600; font-size: 16px; }
-      #safety .badge { flex: none; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 900; color: #0b1a36; font-size: 20px; }
-      #ready { margin-top: auto; background: #b6f04a; font-size: 26px; min-height: 68px; }
+      #lineup { position: absolute; inset: 0; z-index: 5; background: #16305a; display: flex; flex-direction: column; gap: 14px; padding: 22px 18px calc(22px + env(safe-area-inset-bottom, 0px)); overflow-y: auto; }
+      #lineup h1 { font-size: 30px; color: #ffd23f; }
+      #tips { display: flex; flex-direction: column; gap: 10px; }
+      #lineup .tip { display: flex; gap: 14px; align-items: flex-start; background: #24467d; border-radius: 18px; padding: 14px 16px; }
+      #lineup .tip b { display: block; font-size: 20px; margin-bottom: 2px; }
+      #lineup .tip span { color: #bcd0f2; font-weight: 600; font-size: 16px; }
+      #others { display: flex; flex-wrap: wrap; gap: 8px; }
+      #others .who { display: flex; align-items: center; gap: 8px; background: #24467d; border-radius: 999px; padding: 6px 12px 6px 8px; font-weight: 800; font-size: 16px; }
+      #others .who i { width: 14px; height: 14px; border-radius: 50%; display: inline-block; }
+      #others .who em { font-style: normal; color: #bcd0f2; font-weight: 600; }
+      #lineup .badge { flex: none; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 900; color: #0b1a36; font-size: 20px; }
+      #ready { margin-top: auto; position: sticky; bottom: 0; background: #b6f04a; font-size: 26px; min-height: 68px; box-shadow: 0 -10px 18px #16305a; }
+      #ready.done { background: #24467d; color: #b6f04a; font-size: 20px; }
       #menu { position: absolute; inset: 0; z-index: 6; background: #16305a; display: flex; flex-direction: column; gap: 10px; padding: 22px 18px calc(22px + env(safe-area-inset-bottom, 0px)); overflow-y: auto; }
       #menu h1 { font-size: 30px; color: #ffd23f; margin-bottom: 6px; }
       #menu-items { display: flex; flex-direction: column; gap: 10px; }
@@ -82,12 +90,14 @@
       #menu-items .value button { min-height: 48px; width: 52px; padding: 0; font-size: 24px; background: #16305a; color: #fff8ec; }
       #wardrobe { position: absolute; inset: 0; z-index: 4; background: #16305a; display: flex; flex-direction: column; gap: 14px; padding: 22px 18px calc(22px + env(safe-area-inset-bottom, 0px)); overflow-y: auto; }
       #wardrobe h1 { font-size: 30px; color: var(--me, #ffd23f); }
-      #wardrobe h2 { margin: 4px 0 0; font-size: 17px; color: #bcd0f2; text-transform: uppercase; letter-spacing: 0.08em; }
-      #wardrobe .opts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-      #wardrobe .opts button { min-height: 64px; padding: 8px 6px; font-size: 16px; line-height: 1.15; background: #24467d; color: #fff8ec; }
-      #wardrobe .opts button.on { background: var(--me, #ffd23f); color: #0b1a36; outline: 3px solid #fff8ec; }
-      #wardrobe .opts button span { display: block; font-size: 26px; margin-bottom: 2px; }
-      #wardrobe .opts.two { grid-template-columns: repeat(2, 1fr); }
+      .picker h2 { margin: 4px 0 0; font-size: 17px; color: #bcd0f2; text-transform: uppercase; letter-spacing: 0.08em; }
+      .picker .opts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+      .picker .opts button { min-height: 64px; padding: 8px 6px; font-size: 16px; line-height: 1.15; background: #24467d; color: #fff8ec; }
+      .picker .opts button.on { background: var(--me, #ffd23f); color: #0b1a36; outline: 3px solid #fff8ec; }
+      .picker .opts button span { display: block; font-size: 26px; margin-bottom: 2px; }
+      .picker .opts.two { grid-template-columns: repeat(2, 1fr); }
+      .picker > *, .picker-rows > * { flex-shrink: 0; } /* taller than the phone: scroll, don't squash the rows */
+      .picker .level-sub { margin: 8px 2px 0; font-size: 15px; color: #bcd0f2; min-height: 1.2em; }
       #wardrobe-done { margin-top: auto; background: #b6f04a; font-size: 24px; min-height: 64px; }
       .dress { background: #ffd23f; }
       [hidden] { display: none !important; }
@@ -108,25 +118,30 @@
       <div class="scores" id="scores"></div>
       <button id="again" hidden>Play again</button>
       <div class="row" id="playrow"><button class="dress" id="dress">Wardrobe</button><button class="pause" id="pause">Pause</button></div>
-      <section id="wardrobe" hidden aria-labelledby="wardrobe-title">
+      <section id="wardrobe" class="picker" hidden aria-labelledby="wardrobe-title">
         <h1 id="wardrobe-title">Dress your bean</h1>
-        <div id="wardrobe-slots"></div>
+        <div id="wardrobe-slots" class="picker-rows"></div>
         <button id="wardrobe-done">Done</button>
       </section>
       <section id="menu" hidden aria-labelledby="menu-title">
         <h1 id="menu-title"></h1>
         <div id="menu-items"></div>
       </section>
-      <section id="safety" hidden aria-labelledby="safety-title">
-        <h1 id="safety-title">Before you swing</h1>
-        <div class="tip"><span class="badge" style="background:#2ad1c9"><svg width="26" height="26" viewBox="-13 -13 26 26" fill="none" stroke="#0b1a36" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><circle cx="0" cy="-7" r="3" fill="#0b1a36" stroke="none"/><path d="M0 -3V5M-9 -1H9M0 5L-5 11M0 5L5 11"/></svg></span><div><b>Give yourself room</b><span>Stand where a full swing can’t reach anyone or anything: people, pets, the TV, lamps.</span></div></div>
-        <div class="tip"><span class="badge" style="background:#ff5c8a"><svg width="26" height="26" viewBox="-13 -13 26 26" fill="none" stroke="#0b1a36" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><rect x="-4" y="-10" width="8" height="15" rx="2"/><circle cx="-5" cy="3" r="3.5" fill="#0b1a36" stroke="none"/><circle cx="5" cy="3" r="3.5" fill="#0b1a36" stroke="none"/></svg></span><div><b>Hold on tight</b><span>Grip your phone in both hands all the way through the swing. A grippy case or a wrist strap helps.</span></div></div>
-        <div class="tip"><span class="badge" style="background:#b6f04a"><svg width="26" height="26" viewBox="-13 -13 26 26" fill="none" stroke="#0b1a36" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M-10 -2A11 11 0 0 0 10 -2"/><circle cx="10" cy="-6" r="2.6" fill="#0b1a36" stroke="none"/></svg></span><div><b>Smooth beats hard</b><span>A smooth swing reads just as well as a wild one. Never let go of the phone.</span></div></div>
+      <section id="lineup" class="picker" hidden aria-labelledby="lineup-title">
+        <h1 id="lineup-title">Get ready</h1>
+        <div id="others"></div>
+        <div id="lineup-level" class="picker-rows"></div>
+        <div id="tips" hidden>
+          <div class="tip"><span class="badge" style="background:#2ad1c9"><svg width="26" height="26" viewBox="-13 -13 26 26" fill="none" stroke="#0b1a36" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><circle cx="0" cy="-7" r="3" fill="#0b1a36" stroke="none"/><path d="M0 -3V5M-9 -1H9M0 5L-5 11M0 5L5 11"/></svg></span><div><b>Give yourself room</b><span>Stand where a full swing can’t reach anyone or anything: people, pets, the TV, lamps.</span></div></div>
+          <div class="tip"><span class="badge" style="background:#ff5c8a"><svg width="26" height="26" viewBox="-13 -13 26 26" fill="none" stroke="#0b1a36" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><rect x="-4" y="-10" width="8" height="15" rx="2"/><circle cx="-5" cy="3" r="3.5" fill="#0b1a36" stroke="none"/><circle cx="5" cy="3" r="3.5" fill="#0b1a36" stroke="none"/></svg></span><div><b>Hold on tight</b><span>Grip your phone in both hands all the way through the swing. A grippy case or a wrist strap helps.</span></div></div>
+          <div class="tip"><span class="badge" style="background:#b6f04a"><svg width="26" height="26" viewBox="-13 -13 26 26" fill="none" stroke="#0b1a36" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M-10 -2A11 11 0 0 0 10 -2"/><circle cx="10" cy="-6" r="2.6" fill="#0b1a36" stroke="none"/></svg></span><div><b>Smooth beats hard</b><span>A smooth swing reads just as well as a wild one. Never let go of the phone.</span></div></div>
+        </div>
+        <div id="lineup-rows" class="picker-rows"></div>
         <button id="ready">I’m ready</button>
       </section>
     </main>
     <script>
-      // This screen draws its own menus and safety card: keep controller.js's built-in ones off.
+      // This screen draws its own menus and Line-up (with the safety tips): keep controller.js's built-in ones off.
       controller.menuScreen = false
       controller.safetyScreen = false
       const $ = (id) => document.getElementById(id)
@@ -681,21 +696,59 @@
         controller.vibrate(40)
       })
 
-      // The safety card: shown once per party, before your first swing. SET stays covered until
-      // you tap I'm ready; the TV waits for everyone (or starts anyway after a moment).
+      // The Line-up, before the first swing of every game (public.phase 'lineup'): pick your level,
+      // dress your bean and pick your swing, see what everyone else picked (public.lineup), then
+      // I'm ready ({ ready, safe }). The first game of a party also has the safety tips (mine.tips).
+      // SET stays covered until you've read them: if the TV started without you, the Line-up stays
+      // up (tips and all) until you tap I'm ready.
       let readTapped = false
+      let lineupKey = ''
       $('ready').onclick = () => {
         readTapped = true
-        controller.send({ safe: true })
+        controller.send({ ready: true, safe: true })
         controller.vibrate(20)
         render()
       }
+      function renderLineup(inGame) {
+        const { public: pub, mine } = controller
+        const picking = pub.phase === 'lineup' && mine.seated !== false
+        const unread = inGame && !mine.safe && !readTapped
+        const show = (picking || unread) && !held
+        $('lineup').hidden = !show
+        if (!show) return
+        $('tips').hidden = !(mine.tips || !mine.safe)
+        const ready = picking && Boolean(mine.ready)
+        $('ready').textContent = ready ? 'Ready ✓ · waiting for the others' : 'I’m ready'
+        $('ready').className = ready ? 'done' : ''
+        const key = JSON.stringify([pub.wardrobe, pub.levels, pub.lineup, mine.outfit, mine.hand, mine.level, me()])
+        if (key === lineupKey) return
+        lineupKey = key
+        // Everyone else, and what they picked.
+        const levelName = (id) => (pub.levels ?? []).find((l) => l.id === id)?.label ?? ''
+        $('others').replaceChildren(
+          ...(pub.lineup ?? []).filter((x) => x.name !== controller.me.name).map((x) => {
+            const chip = document.createElement('span')
+            chip.className = 'who'
+            const dot = document.createElement('i')
+            dot.style.background = x.color
+            const lvl = document.createElement('em')
+            lvl.textContent = `${levelName(x.level)}${x.ready ? ' ✓' : ''}`
+            chip.append(dot, x.name, lvl)
+            return chip
+          })
+        )
+        $('lineup-level').replaceChildren(...levelRow(mine.level ?? 'normal', pub.levels ?? []))
+        $('lineup-rows').replaceChildren(...pickerRows({ withLevel: false }))
+      }
+      const me = () => controller.me?.name ?? ''
       $('pause').onclick = () => controller.send(controller.public.paused ? { resume: true } : { pause: true })
       // The Wardrobe: a hat, a top and one extra, from the TV's list (public.wardrobe). Each tap
       // goes straight to the TV ({ outfit: { slot: id } }), which dresses your bean on screen and
       // remembers it for next time; your current pick is highlighted from mine.outfit. Below it,
       // which way you swing ({ hand: 'R' | 'L' }, highlighted from mine.hand): the bean turns
-      // round and the TV uses your pick instead of guessing it from how you hold the phone.
+      // round and the TV uses your pick instead of guessing it from how you hold the phone. The
+      // Line-up shows the same rows with your difficulty on top ({ level: 'easy' | 'normal' | 'pro' },
+      // from public.levels, highlighted from mine.level): the TV remembers it by your name.
       let wardrobeOpen = false
       let wasMine = false
       let wardrobeKey = ''
@@ -713,15 +766,27 @@
       function renderWardrobe() {
         const list = controller.public.wardrobe
         const worn = controller.mine.outfit
-        const show = wardrobeOpen && Boolean(list && worn) && !held
+        const show = wardrobeOpen && Boolean(list && worn) && !held && $('lineup').hidden
         $('wardrobe').hidden = !show
         if (!show) return
-        const hand = controller.mine.hand ?? 'R'
-        const key = JSON.stringify([list, worn, hand])
+        const key = JSON.stringify([list, worn, controller.mine.hand])
         if (key === wardrobeKey) return
         wardrobeKey = key
-        $('wardrobe-slots').replaceChildren(
-          ...Object.entries(SLOTS).flatMap(([slot, title]) => {
+        $('wardrobe-slots').replaceChildren(...pickerRows({ withLevel: false }))
+      }
+      /**
+       * The picker rows the Wardrobe and the Line-up share: Difficulty first (the Line-up only),
+       * then the hat, top and extra, then Swing.
+       */
+      function pickerRows({ withLevel }) {
+        const list = controller.public.wardrobe
+        const worn = controller.mine.outfit ?? {}
+        const hand = controller.mine.hand ?? 'R'
+        const level = controller.mine.level ?? 'normal'
+        const levels = controller.public.levels ?? []
+        return [
+          ...(withLevel ? levelRow(level, levels) : []),
+          ...(list ? Object.entries(SLOTS) : []).flatMap(([slot, title]) => {
             const h = document.createElement('h2')
             h.textContent = title
             const row = document.createElement('div')
@@ -745,7 +810,34 @@
             return [h, row]
           }),
           ...swingRow(hand)
-        )
+        ]
+      }
+      function levelRow(level, levels) {
+        if (!levels.length) return []
+        const h = document.createElement('h2')
+        h.textContent = 'Difficulty'
+        const row = document.createElement('div')
+        row.className = 'opts'
+        for (const item of levels) {
+          const b = document.createElement('button')
+          b.className = level === item.id ? 'on' : ''
+          b.dataset.level = item.id
+          b.setAttribute('aria-pressed', String(level === item.id))
+          const mark = document.createElement('span')
+          mark.textContent = item.icon ?? '•'
+          mark.setAttribute('aria-hidden', 'true')
+          b.append(mark, item.label)
+          b.onclick = () => {
+            controller.send({ level: item.id })
+            controller.vibrate(12)
+          }
+          row.append(b)
+        }
+        // What the picked level does, in a line.
+        const sub = document.createElement('p')
+        sub.className = 'level-sub'
+        sub.textContent = levels.find((x) => x.id === level)?.sub ?? ''
+        return [h, row, sub]
       }
       function swingRow(hand) {
         const h = document.createElement('h2')
@@ -859,11 +951,11 @@
         const mineNow = myTurn()
         const over = pub.phase === 'over'
         const inGame = pub.phase && pub.phase !== 'menu' && pub.phase !== 'over'
-        $('safety').hidden = !(inGame && !mine.safe && !readTapped)
+        renderLineup(inGame)
         if (!mineNow && held) letGo()
         if (mineNow && !wasMine) wardrobeOpen = false // your shot: back to the club
         wasMine = mineNow
-        $('title').textContent = pub.paused ? 'Paused' : over ? 'Challenge over' : pub.banner ? pub.banner : mineNow ? (mine.golfer ? `Your shot, ${mine.golfer.name}!` : 'Your shot!') : pub.turnName ? `${pub.turnName} is up` : 'Seaside Swing'
+        $('title').textContent = pub.paused ? 'Paused' : over ? 'Challenge over' : pub.banner ? pub.banner : mineNow ? (mine.golfer ? `Your shot, ${mine.golfer.name}!` : 'Your shot!') : pub.turnName ? `${pub.turnName} is up` : 'Big Swing Golf'
         // Putting: the putting modes, or a ball on the course's green (the TV says which).
         const putting = pub.putting ?? (pub.mode === 'putting' || pub.mode === 'putts')
         $('hint').textContent = over

@@ -141,18 +141,18 @@ test('a phone without motion sensors swings with the pad: pull down, flick up', 
   await page.close()
 })
 
-test('before the first swing the phone shows the safety card; I\u2019m ready sends it to the TV and shows SET', async () => {
+test('a phone that hasn\u2019t read the safety tips gets them before its first swing (even if the TV started without it); I\u2019m ready sends it and shows SET', async () => {
   await open()
   await page.evaluate(() => {
     window.controller.mine.safe = false
     window.controller.emit('update', window.controller)
   })
-  assert.equal(await page.locator('#safety').isVisible(), true)
-  assert.match(await page.locator('#safety').textContent(), /Give yourself room.*Hold on tight.*Smooth beats hard/s)
+  assert.equal(await page.locator('#lineup').isVisible(), true)
+  assert.match(await page.locator('#tips').textContent(), /Give yourself room.*Hold on tight.*Smooth beats hard/s)
   assert.equal(await page.locator('#set').isVisible(), false)
   await page.locator('#ready').click()
-  assert.ok((await page.evaluate(() => window.__sent)).some((d) => d.safe === true))
-  assert.equal(await page.locator('#safety').isVisible(), false)
+  assert.ok((await page.evaluate(() => window.__sent)).some((d) => d.safe === true && d.ready === true))
+  assert.equal(await page.locator('#lineup').isVisible(), false)
   assert.equal(await page.locator('#set').isVisible(), true)
   await page.close()
 })
@@ -307,6 +307,71 @@ test('the Wardrobe has Swing: right- or left-handed, a tap tells the TV, and the
     window.controller.emit('update')
   })
   assert.equal(await page.locator('#wardrobe button[data-hand].on').getAttribute('data-hand'), 'L')
+  assert.deepEqual(errors, [])
+  await page.close()
+})
+
+test('the Line-up: pick your level (it says what it does), see everyone else\u2019s, dress your bean, then I\u2019m ready', async () => {
+  const wardrobe = { hat: [{ id: 'none', label: 'No hat' }, { id: 'bucket', label: 'Bucket hat' }], top: [{ id: 'none', label: 'No top' }], acc: [{ id: 'none', label: 'Nothing' }] }
+  const levels = [
+    { id: 'easy', label: 'Easy', sub: 'More help', icon: 'E' },
+    { id: 'normal', label: 'Normal', sub: 'Some help', icon: 'N' },
+    { id: 'pro', label: 'Pro', sub: 'No help', icon: 'P' }
+  ]
+  const lineup = [
+    { name: 'Ada', color: '#ffd23f', level: 'normal', ready: false },
+    { name: 'Bo', color: '#ff5c8a', level: 'pro', ready: true }
+  ]
+  const errors = await open({ phase: 'lineup', wardrobe, levels, lineup })
+  await page.evaluate(() => {
+    Object.assign(window.controller.mine, { active: false, seated: true, safe: true, tips: false, ready: false, level: 'normal', hand: 'R', outfit: { hat: 'none', top: 'none', acc: 'none' } })
+    window.controller.emit('update')
+  })
+  assert.equal(await page.locator('#lineup').isVisible(), true)
+  assert.equal(await page.locator('#tips').isVisible(), false) // not the party's first game
+  assert.deepEqual(await page.locator('#others .who').allTextContents(), ['BoPro ✓']) // everyone but you
+  assert.deepEqual(await page.locator('#lineup button[data-level]').allTextContents(), ['EEasy', 'NNormal', 'PPro'])
+  assert.equal(await page.locator('#lineup button[data-level].on').getAttribute('data-level'), 'normal')
+  assert.equal(await page.locator('#lineup .level-sub').textContent(), 'Some help')
+  await page.locator('#lineup button[data-level="easy"]').click()
+  assert.deepEqual((await page.evaluate(() => window.__sent)).at(-1), { level: 'easy' })
+  await page.evaluate(() => {
+    window.controller.mine.level = 'easy'
+    window.controller.emit('update')
+  })
+  assert.equal(await page.locator('#lineup button[data-level].on').getAttribute('data-level'), 'easy')
+  assert.equal(await page.locator('#lineup .level-sub').textContent(), 'More help')
+  // Your bean and your swing are here too.
+  await page.locator('#lineup button', { hasText: 'Bucket hat' }).click()
+  assert.deepEqual((await page.evaluate(() => window.__sent)).at(-1), { outfit: { hat: 'bucket' } })
+  await page.locator('#lineup button[data-hand="L"]').click()
+  assert.deepEqual((await page.evaluate(() => window.__sent)).at(-1), { hand: 'L' })
+  // I'm ready: the TV confirms, and you can still change your mind until it starts.
+  await page.locator('#ready').click()
+  assert.deepEqual((await page.evaluate(() => window.__sent)).at(-1), { ready: true, safe: true })
+  await page.evaluate(() => {
+    window.controller.mine.ready = true
+    window.controller.emit('update')
+  })
+  assert.match(await page.locator('#ready').textContent(), /Ready ✓/)
+  assert.equal(await page.locator('#lineup button[data-level="pro"]').isEnabled(), true)
+  // The game starts: the Line-up goes.
+  await page.evaluate(() => {
+    window.controller.public.phase = 'aim'
+    window.controller.emit('update')
+  })
+  assert.equal(await page.locator('#lineup').isVisible(), false)
+  assert.deepEqual(errors, [])
+  await page.close()
+})
+
+test('the first game of a party shows the safety tips in the Line-up', async () => {
+  const errors = await open({ phase: 'lineup', levels: [{ id: 'normal', label: 'Normal', sub: '', icon: 'N' }], lineup: [] })
+  await page.evaluate(() => {
+    Object.assign(window.controller.mine, { active: false, seated: true, safe: false, tips: true, ready: false })
+    window.controller.emit('update')
+  })
+  assert.equal(await page.locator('#tips').isVisible(), true)
   assert.deepEqual(errors, [])
   await page.close()
 })

@@ -172,7 +172,7 @@ export function rollPutt(from, dir, speed, cup, P = TUNING.putting, G = GREEN) {
 
 /**
  * A putting stroke's settings for strokePower(), scaled to the putt: a full backstroke (backFull
- * degrees, by the "Swing power needed" setting) rolls `range` metres on the flat, and the distance
+ * degrees, by the player's level) rolls `range` metres on the flat, and the distance
  * goes in proportion to the backstroke, so halfway back rolls half of it. The game sets the range
  * to twice the putt, so the middle of the bar is the cup whether it's 3 ft or 30: the same stroke
  * for every putt, and a wobble of a degree or two costs the same small share of any of them.
